@@ -71,6 +71,9 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
         )
         return 0
     finally:
+        close = getattr(adapter, "close", None)
+        if callable(close):
+            close()
         store.close()
 
 

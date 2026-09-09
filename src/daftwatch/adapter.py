@@ -8,11 +8,17 @@ import random
 import re
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode, urljoin
 
 from daftwatch.config import Search
-from daftwatch.models import Listing, parse_beds, parse_price
+from daftwatch.models import (
+    Listing,
+    parse_beds,
+    parse_int,
+    parse_price_range,
+)
 
 _BACKOFF = [30, 60, 120, 240, 300]
 _DAFT_BASE = "https://www.daft.ie"
@@ -59,6 +65,18 @@ def _coord(d: dict, idx: int):
         return None
 
 
+def _iso_from_ms(ms: Any) -> str | None:
+    """ISO date (UTC) from a millisecond epoch, or None for bad/absent values."""
+    try:
+        return (
+            datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc)
+            .date()
+            .isoformat()
+        )
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
 def to_listing(d: dict, category: str) -> Listing:
     """Map one daft.ie ``__NEXT_DATA__`` inner ``listing`` dict to our Listing.
 
@@ -67,13 +85,24 @@ def to_listing(d: dict, category: str) -> Listing:
     schema drift degrades fields rather than crashing.
     """
     path = d.get("seoFriendlyPath")
+    price_text = d.get("price") or ""
+    price = parse_price_range(price_text)
+    weekly = "per week" in price_text.lower()
+
+    if category == "sharing":
+        beds = None
+        room_type = d.get("numBedrooms")
+    else:
+        beds = parse_beds(d.get("numBedrooms"))
+        room_type = None
+
     return Listing(
         id=str(d.get("id", "")),
         category=category,
         title=d.get("title") or "",
         url=urljoin(_DAFT_BASE, path) if path else "",
-        price_eur=parse_price(d.get("price") or ""),
-        beds=parse_beds(d.get("numBedrooms")),
+        price_eur=price,
+        beds=beds,
         baths=parse_beds(d.get("numBathrooms")),
         property_type=d.get("propertyType"),
         area=None,
@@ -81,7 +110,54 @@ def to_listing(d: dict, category: str) -> Listing:
         lat=_coord(d, 1),
         lng=_coord(d, 0),
         raw=d,
+        source="daft",
+        currency="EUR",
+        price_native=price,
+        price_weekly=parse_int(price_text) if weekly else None,
+        first_published=_iso_from_ms(d.get("publishDate")),
+        room_type=room_type,
     )
+
+
+def _overview_map(listing: dict) -> dict[str, str]:
+    """Flatten a detail page's ``propertyOverview`` list to a ``{label: text}``
+    map with lower-cased, stripped labels."""
+    return {
+        item["label"].strip().lower(): (item.get("text") or "").strip()
+        for item in listing.get("propertyOverview") or []
+    }
+
+
+def _yn(text: Any) -> bool | None:
+    """"Yes"/"No" (case-insensitive) → True/False; anything else → None."""
+    if not isinstance(text, str):
+        return None
+    t = text.strip().lower()
+    if t == "yes":
+        return True
+    if t == "no":
+        return False
+    return None
+
+
+def parse_detail(listing_dict: dict) -> dict:
+    """Pure map of a detail-page ``listing`` dict (with ``_overview``) to the
+    8 enrichment fields ``store.apply_detail`` expects."""
+    ov = listing_dict.get("_overview", {})
+    description = (listing_dict.get("description") or "").strip()[:1000] or None
+    last_updated = _iso_from_ms(listing_dict.get("lastUpdateDate")) or _iso_from_ms(
+        listing_dict.get("firstPublishDate")
+    )
+    return {
+        "sharing_with": parse_int(ov.get("sharing with")),
+        "rooms_available": parse_int(ov.get("bedrooms available")),
+        "preferences": ov.get("preferences") or None,
+        "owner_occupied": _yn(ov.get("owner occupied")),
+        "available_from": ov.get("available from") or None,
+        "bathroom_type": listing_dict.get("bathroomType"),
+        "description": description,
+        "last_updated": last_updated,
+    }
 
 
 class SearchAdapter(abc.ABC):
@@ -223,6 +299,34 @@ def _default_client() -> Any:
                 pass
             return [item["listing"] for item in pp["listings"]]
 
+        def detail(self, path: str) -> dict:
+            self._ensure()
+            url = urljoin(_DAFT_BASE, path)
+            pg = self._ctx.new_page()
+            try:
+                pg.goto(url, wait_until="domcontentloaded", timeout=45000)
+                try:
+                    pg.wait_for_selector(
+                        "script#__NEXT_DATA__",
+                        state="attached",
+                        timeout=25000,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                html = pg.content()
+            finally:
+                pg.close()
+            try:
+                self._ctx.storage_state(path=_STORAGE)
+            except Exception:  # noqa: BLE001
+                pass
+            # raises RateLimited if still challenged (no __NEXT_DATA__)
+            data = _extract_next_data(html)
+            # LOUD KeyError on schema drift -> AdapterError upstream.
+            listing = data["props"]["pageProps"]["listing"]
+            listing["_overview"] = _overview_map(listing)
+            return listing
+
         def close(self) -> None:
             for obj, meth in (
                 (self._ctx, "close"),
@@ -262,11 +366,21 @@ class DaftListingsAdapter(SearchAdapter):
         self._max_pages = max_pages
         self._sleep = sleeper
         self._make_client = client_factory
+        # One client is lazily created and reused for the whole cycle (fetch +
+        # the detail loop). The runner calls close() in a finally.
+        self._client: Any = None
 
-    def _page_with_backoff(self, client: Any, n: int) -> list[dict]:
+    def _ensure_client(self) -> Any:
+        if self._client is None:
+            self._client = self._make_client()
+        return self._client
+
+    def _with_backoff(self, fn: Callable[[], Any]) -> Any:
+        """Run ``fn``; on RateLimited sleep the backoff ladder and retry, then
+        give up with AdapterError. Any other error → AdapterError (no retry)."""
         for delay in _BACKOFF:
             try:
-                return client.page(n)
+                return fn()
             except RateLimited:
                 self._sleep(delay)
                 continue
@@ -274,26 +388,35 @@ class DaftListingsAdapter(SearchAdapter):
                 raise AdapterError(f"daft.ie fetch failed: {exc!r}") from exc
         raise AdapterError("rate-limited by daft.ie; backoff exhausted")
 
-    def fetch(self, search: Search) -> list[Listing]:
-        client = self._make_client()
-        try:
-            client.set_category(search.category)
-            client.set_params(dict(search.params))
+    def _page_with_backoff(self, client: Any, n: int) -> list[dict]:
+        return self._with_backoff(lambda: client.page(n))
 
-            listings: list[Listing] = []
-            prev_count: int | None = None
-            for n in range(1, self._max_pages + 1):
-                if n > 1:
-                    self._sleep(self._rate + random.uniform(-0.5, 0.5))
-                page = self._page_with_backoff(client, n)
-                if not page:
-                    break
-                listings.extend(to_listing(d, search.category) for d in page)
-                if prev_count is not None and len(page) < prev_count:
-                    break
-                prev_count = len(page)
-            return listings
-        finally:
-            close = getattr(client, "close", None)
+    def detail(self, path: str) -> dict:
+        client = self._ensure_client()
+        return self._with_backoff(lambda: client.detail(path))
+
+    def close(self) -> None:
+        if self._client is not None:
+            close = getattr(self._client, "close", None)
             if callable(close):
                 close()
+            self._client = None
+
+    def fetch(self, search: Search) -> list[Listing]:
+        client = self._ensure_client()
+        client.set_category(search.category)
+        client.set_params(dict(search.params))
+
+        listings: list[Listing] = []
+        prev_count: int | None = None
+        for n in range(1, self._max_pages + 1):
+            if n > 1:
+                self._sleep(self._rate + random.uniform(-0.5, 0.5))
+            page = self._page_with_backoff(client, n)
+            if not page:
+                break
+            listings.extend(to_listing(d, search.category) for d in page)
+            if prev_count is not None and len(page) < prev_count:
+                break
+            prev_count = len(page)
+        return listings

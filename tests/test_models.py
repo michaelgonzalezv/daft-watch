@@ -58,6 +58,10 @@ def test_parse_price_range_weekly():
     assert parse_price_range("€160 per week") == round(160 * 52 / 12)
 
 
+def test_parse_price_range_weekly_range_normalized():
+    assert parse_price_range("From €150 to €175 per week") == round(150 * 52 / 12)
+
+
 def test_parse_price_range_delegates_plain():
     assert parse_price_range("€1750") == 1750
 

@@ -60,7 +60,10 @@ def parse_price_range(text: str) -> int:
         return 0
     m = _RANGE.search(text)
     if m:
-        return int(m.group(1).replace(",", ""))
+        low = int(m.group(1).replace(",", ""))
+        if "week" in text.lower():
+            return round(low * 52 / 12)
+        return low
     return parse_price(text)
 
 

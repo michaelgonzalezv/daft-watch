@@ -8,6 +8,8 @@ from daftwatch.adapter import (
     SearchAdapter,
     _build_url,
     _extract_next_data,
+    _overview_map,
+    parse_detail,
     to_listing,
 )
 
@@ -46,6 +48,82 @@ def test_to_listing_weekly_prs_converts_price():
     assert l.baths is None  # numBathrooms absent
     assert l.property_type == "Private Rental Sector"
     assert l.url.endswith(src["seoFriendlyPath"])
+
+
+def _share_listing(i: int) -> dict:
+    data = json.loads((FIX / "daft_share_search.json").read_text(encoding="utf-8"))
+    return data["props"]["pageProps"]["listings"][i]["listing"]
+
+
+def _detail_listing() -> dict:
+    data = json.loads((FIX / "daft_share_detail.json").read_text(encoding="utf-8"))
+    listing = data["props"]["pageProps"]["listing"]
+    listing["_overview"] = _overview_map(listing)
+    return listing
+
+
+def test_to_listing_sharing_monthly_range():
+    l = to_listing(_share_listing(0), "sharing")
+    assert l.source == "daft"
+    assert l.currency == "EUR"
+    assert l.room_type == "Double & Twin Room"
+    assert l.beds is None
+    assert l.price_eur == 725  # low end of "From €725 to €750 per month"
+    assert l.price_native == 725
+    assert l.price_weekly is None
+    assert isinstance(l.first_published, str) and l.first_published[:4].isdigit()
+    assert len(l.first_published) == 10  # ISO date
+
+
+def test_to_listing_sharing_weekly():
+    l = to_listing(_share_listing(1), "sharing")
+    assert l.price_weekly == 160
+    assert l.price_eur == round(160 * 52 / 12)
+    assert l.price_native == round(160 * 52 / 12)
+    assert l.room_type == "Single Room"
+    assert l.beds is None
+
+
+def test_to_listing_rent_keeps_beds_parsing():
+    l = to_listing({"id": "5", "numBedrooms": "2 Bed", "price": "€1500 per month"}, "rent")
+    assert l.beds == 2
+    assert l.room_type is None
+    assert l.price_weekly is None
+
+
+def test_to_listing_bad_publish_date_is_none():
+    l = to_listing({"id": "5", "publishDate": "not-a-number"}, "sharing")
+    assert l.first_published is None
+
+
+def test_parse_detail_from_fixture():
+    fields = parse_detail(_detail_listing())
+    assert set(fields) == {
+        "sharing_with", "rooms_available", "preferences", "owner_occupied",
+        "available_from", "bathroom_type", "description", "last_updated",
+    }
+    assert fields["sharing_with"] == 4
+    assert fields["rooms_available"] == 1
+    assert fields["preferences"] == "Female"
+    assert fields["owner_occupied"] is False
+    assert fields["available_from"] == "Immediately"
+    assert fields["bathroom_type"] == "Shared Bathroom"
+    assert fields["description"] and len(fields["description"]) <= 1000
+    assert isinstance(fields["last_updated"], str) and len(fields["last_updated"]) == 10
+
+
+def test_parse_detail_empty_overview_all_none():
+    fields = parse_detail({"_overview": {}})
+    assert set(fields) == {
+        "sharing_with", "rooms_available", "preferences", "owner_occupied",
+        "available_from", "bathroom_type", "description", "last_updated",
+    }
+    assert all(v is None for v in fields.values())
+
+
+def test_parse_detail_last_updated_falls_back_to_first_publish():
+    fields = parse_detail({"_overview": {}, "firstPublishDate": 1788373250189})
+    assert isinstance(fields["last_updated"], str) and len(fields["last_updated"]) == 10
 
 
 def test_to_listing_tolerates_missing_keys():
@@ -103,11 +181,13 @@ from daftwatch.config import Search
 
 
 class FakeClient:
-    def __init__(self, pages):
+    def __init__(self, pages, detail_result=None):
         self._pages = pages
+        self._detail_result = detail_result if detail_result is not None else {"_overview": {}}
         self.category = None
         self.params = None
         self.calls = []
+        self.detail_calls = []
 
     def set_category(self, c): self.category = c
     def set_params(self, p): self.params = p
@@ -116,12 +196,32 @@ class FakeClient:
         self.calls.append(n)
         return self._pages[n - 1] if n - 1 < len(self._pages) else []
 
+    def detail(self, path):
+        self.detail_calls.append(path)
+        return self._detail_result
+
+    def close(self): pass
+
 
 class BoomClient:
     def __init__(self, exc): self.exc = exc
     def set_category(self, c): pass
     def set_params(self, p): pass
     def page(self, n): raise self.exc
+    def detail(self, path): raise self.exc
+    def close(self): pass
+
+
+class CountingFactory:
+    """client_factory that records how many times it was called."""
+
+    def __init__(self, client):
+        self.client = client
+        self.count = 0
+
+    def __call__(self):
+        self.count += 1
+        return self.client
 
 
 class CloseTrackingFakeClient(FakeClient):
@@ -196,21 +296,63 @@ def test_fetch_wraps_other_errors_without_retry():
     assert slept == []  # generic errors are not retried
 
 
-def test_fetch_closes_client_when_present():
+def test_fetch_does_not_close_client_and_close_does():
     fake = CloseTrackingFakeClient([[{"id": "1", "price": "€1 per month"}]])
     _, sleeper = _rec_sleeper()
     a = DaftListingsAdapter(sleeper=sleeper, client_factory=lambda: fake)
     a.fetch(Search(name="s", category="rent", params={}))
+    assert fake.closed == 0  # fetch reuses the client; runner owns close()
+    a.close()
+    assert fake.closed == 1
+    a.close()  # idempotent
     assert fake.closed == 1
 
 
-def test_fetch_closes_client_even_when_fetch_raises():
+def test_close_after_fetch_error_still_closes():
     boom = CloseTrackingBoomClient(RuntimeError("boom"))
     _, sleeper = _rec_sleeper()
     a = DaftListingsAdapter(sleeper=sleeper, client_factory=lambda: boom)
     with pytest.raises(AdapterError):
         a.fetch(Search(name="s", category="rent", params={}))
+    a.close()
     assert boom.closed == 1
+
+
+def test_fetch_then_detail_reuse_the_same_client():
+    fake = FakeClient(
+        [[{"id": "1", "price": "€1 per month"}]],
+        detail_result={"_overview": {"sharing with": "3"}, "bathroomType": "Ensuite"},
+    )
+    factory = CountingFactory(fake)
+    _, sleeper = _rec_sleeper()
+    a = DaftListingsAdapter(sleeper=sleeper, client_factory=factory)
+    a.fetch(Search(name="s", category="sharing", params={}))
+    detail = a.detail("/share/x/1")
+    assert factory.count == 1  # one client for fetch + detail
+    assert fake.detail_calls == ["/share/x/1"]
+    assert parse_detail(detail)["sharing_with"] == 3
+
+
+def test_detail_backoff_then_error_on_rate_limited():
+    slept, sleeper = _rec_sleeper()
+    a = DaftListingsAdapter(
+        sleeper=sleeper,
+        client_factory=lambda: BoomClient(RateLimited("daft.ie returned 429")),
+    )
+    with pytest.raises(AdapterError):
+        a.detail("/share/x/1")
+    assert slept[:5] == [30, 60, 120, 240, 300]
+
+
+def test_detail_wraps_other_errors_without_retry():
+    slept, sleeper = _rec_sleeper()
+    a = DaftListingsAdapter(
+        sleeper=sleeper,
+        client_factory=lambda: BoomClient(RuntimeError("boom")),
+    )
+    with pytest.raises(AdapterError):
+        a.detail("/share/x/1")
+    assert slept == []
 
 
 @pytest.mark.live
@@ -229,3 +371,46 @@ def test_default_client_live_hits_daft():
         assert "id" in first and "title" in first and "price" in first
     finally:
         client.close()
+
+
+@pytest.mark.live
+def test_default_client_detail_live():
+    """Real headless Chromium fetch of one sharing detail page; excluded from CI."""
+    from daftwatch.adapter import _default_client
+
+    client = _default_client()
+    try:
+        client.set_category("sharing")
+        client.set_params({"location": ["cork-city-cork"]})
+        page = client.page(1)
+        assert page, "no sharing listings on cork-city right now"
+        path = page[0]["seoFriendlyPath"]
+        detail = client.detail(path)
+        assert isinstance(detail, dict)
+        assert "_overview" in detail
+        # must not raise regardless of which overview fields the page carries
+        fields = parse_detail(detail)
+        assert set(fields) == {
+            "sharing_with", "rooms_available", "preferences", "owner_occupied",
+            "available_from", "bathroom_type", "description", "last_updated",
+        }
+    finally:
+        client.close()
+
+
+@pytest.mark.live
+def test_adapter_detail_live():
+    from daftwatch.config import Search as _S
+
+    # no-op sleeper: a rate-limited environment should fail fast, not sleep the
+    # full 12-minute backoff ladder.
+    a = DaftListingsAdapter(sleeper=lambda _s: None)
+    try:
+        got = a.fetch(_S(name="cork", category="sharing", params={"location": ["cork-city-cork"]}))
+        assert got
+        path = got[0].url.replace("https://www.daft.ie", "")
+        detail = a.detail(path)
+        assert isinstance(detail, dict)
+        parse_detail(detail)  # does not raise
+    finally:
+        a.close()
