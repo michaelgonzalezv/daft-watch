@@ -5,7 +5,7 @@ WORKDIR /app
 
 # Runtime dependencies only — pytest and other dev deps are deliberately
 # excluded from the image (see requirements.txt for the dev set).
-RUN pip install --no-cache-dir daftlistings==2.0.5 PyYAML==6.0.2
+RUN pip install --no-cache-dir curl_cffi==0.16.3 PyYAML==6.0.2
 
 COPY pyproject.toml .
 COPY src ./src

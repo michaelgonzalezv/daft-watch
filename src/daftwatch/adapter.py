@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import abc
+import json
 import logging
 import random
+import re
 import time
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin
 
 from daftwatch.config import Search
 from daftwatch.models import Listing, parse_beds, parse_price
 
 _BACKOFF = [30, 60, 120, 240, 300]
-_SERVER_PAGE = 50
 _DAFT_BASE = "https://www.daft.ie"
 
 _log = logging.getLogger("daftwatch")
+
+_NEXT_DATA_RE = re.compile(
+    r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S
+)
 
 
 class AdapterError(Exception):
@@ -23,7 +28,7 @@ class AdapterError(Exception):
 
 
 class RateLimited(Exception):
-    """Raised by the client when daft.ie answers 429/403 (HTTP layer)."""
+    """Raised when daft.ie answers 429/403 or serves a Cloudflare challenge."""
 
 
 def _f(value):
@@ -41,11 +46,11 @@ def _coord(d: dict, idx: int):
 
 
 def to_listing(d: dict, category: str) -> Listing:
-    """Map one daftlistings 2.0.5 inner ``listing`` dict to our Listing.
+    """Map one daft.ie ``__NEXT_DATA__`` inner ``listing`` dict to our Listing.
 
-    ``d`` is the object daftlistings exposes as ``Listing.as_dict()`` /
-    ``self._result`` == ``raw_gateway_result["listing"]``. Every key is treated
-    as optional so a schema drift degrades fields rather than crashing.
+    ``d`` is one element of ``props.pageProps.listings[i]["listing"]`` from the
+    search page's ``__NEXT_DATA__`` blob. Every key is treated as optional so a
+    schema drift degrades fields rather than crashing.
     """
     path = d.get("seoFriendlyPath")
     return Listing(
@@ -71,83 +76,104 @@ class SearchAdapter(abc.ABC):
         ...
 
 
-def _default_client() -> Any:
-    """Adapter-shaped wrapper around daftlistings 2.0.5.
+def _extract_next_data(html: str) -> dict:
+    """Pull the parsed ``__NEXT_DATA__`` JSON out of a daft.ie search page.
 
-    This is the ONLY place daftlistings API details live. ``page(n)`` performs
-    exactly ONE HTTP POST to the daft gateway with the paging offset set to
-    ``n-1``, so the adapter's between-page sleep sits between REAL requests and
-    its ``max_pages`` cap genuinely bounds request volume. If daftlistings
-    changes, rewrite this function and nothing else.
+    A valid page yields the parsed dict. A Cloudflare "Security Check" /
+    challenge page has no ``__NEXT_DATA__`` script — that is transient, so raise
+    ``RateLimited`` to let the adapter's backoff ladder kick in (NOT
+    ``AdapterError``, which would trip the broken-scraper alert).
     """
-    import requests
-    from daftlistings import Daft, SearchType
+    m = _NEXT_DATA_RE.search(html)
+    if not m:
+        raise RateLimited("no __NEXT_DATA__ in response (Cloudflare challenge?)")
+    return json.loads(m.group(1))
+
+
+def _build_url(category: str, params: dict, n: int) -> str:
+    """Build the daft.ie search URL for page ``n`` (1-based)."""
+    sub = "sharing" if category == "sharing" else "property-for-rent"
+    locs = [s for s in (params.get("location") or []) if s]
+    query: list[tuple[str, Any]] = []
+    if len(locs) == 1:
+        loc_path = locs[0]
+    else:
+        loc_path = "ireland"
+        query.extend(("location", loc) for loc in locs)
+    if "max_price" in params:
+        query.append(("rentalPrice_to", params["max_price"]))
+    if "min_price" in params:
+        query.append(("rentalPrice_from", params["min_price"]))
+    if "min_beds" in params:
+        query.append(("numBeds_from", params["min_beds"]))
+    if "max_beds" in params:
+        query.append(("numBeds_to", params["max_beds"]))
+    if n > 1:
+        query.append(("page", n))
+    url = f"{_DAFT_BASE}/{sub}/{loc_path}"
+    if query:
+        url += "?" + urlencode(query, doseq=True)
+    return url
+
+
+def _default_client() -> Any:
+    """Adapter-shaped scraper for daft.ie search pages via ``curl_cffi``.
+
+    This is the ONLY place the daft.ie fetch details live. ``daftlistings`` and
+    the gateway API are Cloudflare-blocked (403); instead we fetch the normal
+    search HTML with a Chrome TLS fingerprint and read the listings out of the
+    page's ``__NEXT_DATA__`` JSON blob. ``page(n)`` performs exactly ONE HTTP GET
+    so the adapter's between-page sleep sits between REAL requests and its
+    ``max_pages`` cap genuinely bounds request volume. If daft.ie changes its
+    Cloudflare config, bump ``impersonate=`` or the ``__NEXT_DATA__`` selector.
+    """
+    from curl_cffi import requests as _cffi
 
     class _Client:
         def __init__(self) -> None:
-            self._daft = Daft()
-            self._payload: dict | None = None
+            self._category = "rent"
+            self._params: dict = {}
+            self._total_pages: int | None = None
 
         def set_category(self, c: str) -> None:
-            self._daft.set_search_type(
-                SearchType.SHARING if c == "sharing"
-                else SearchType.RESIDENTIAL_RENT
-            )
+            self._category = c
 
         def set_params(self, p: dict) -> None:
-            for loc in p.get("location", []):
-                self._daft.set_location(loc)
-            if "min_price" in p:
-                self._daft.set_min_price(p["min_price"])
-            if "max_price" in p:
-                self._daft.set_max_price(p["max_price"])
-            if "min_beds" in p:
-                self._daft.set_min_beds(p["min_beds"])
-            if "max_beds" in p:
-                self._daft.set_max_beds(p["max_beds"])
-            # Resolve + log what daft actually matched. Daft._get_best_match has
-            # no minimum-score floor, so a typo'd slug silently resolves to the
-            # nearest place; the log line is the only visibility into that.
-            self._payload = self._daft._make_payload()
+            self._params = dict(p)
             _log.info(
-                "search resolved: section=%s geo=%s",
-                self._payload.get("section"),
-                self._payload.get("geoFilter"),
+                "search url: %s", _build_url(self._category, self._params, 1)
             )
 
         def page(self, n: int) -> list[dict]:
-            payload = dict(self._payload or self._daft._make_payload())
-            payload["paging"] = {
-                "from": str((n - 1) * _SERVER_PAGE),
-                "pagesize": str(_SERVER_PAGE),
-            }
-            r = requests.post(
-                Daft._ENDPOINT,
-                headers={
-                    **Daft._HEADER,
-                    "User-Agent": (
-                        "daft-watch/0.1 (personal listings watcher; "
-                        "+https://github.com)"
-                    ),
-                },
-                json=payload,
-                timeout=30,
-            )
+            if self._total_pages is not None and n > self._total_pages:
+                return []
+            url = _build_url(self._category, self._params, n)
+            r = _cffi.get(url, impersonate="chrome131", timeout=30)
             if r.status_code in (429, 403):
                 raise RateLimited(f"daft.ie returned {r.status_code}")
-            r.raise_for_status()
-            body = r.json()
-            # body["listings"] must stay loud: a missing key (schema drift or a
-            # 200-with-error-body) becomes KeyError -> AdapterError ->
-            # adapter_broken, which skips the GONE sweep and fires the
-            # broken-scraper alert. A silent [] would route into a mass
-            # false-GONE digest after gone_after_cycles.
-            return [item["listing"] for item in body["listings"]]
+            data = _extract_next_data(r.text)
+            # pp / pp["listings"] KeyErrors must stay LOUD: a missing key
+            # (schema drift or a 200-with-error-body) becomes KeyError ->
+            # AdapterError -> adapter_broken, which skips the GONE sweep and
+            # fires the broken-scraper alert. A silent [] would route into a
+            # mass false-GONE digest after gone_after_cycles.
+            pp = data["props"]["pageProps"]
+            try:
+                self._total_pages = int(pp["paging"]["totalPages"])
+            except (KeyError, TypeError, ValueError):
+                pass
+            return [item["listing"] for item in pp["listings"]]
 
     return _Client()
 
 
 class DaftListingsAdapter(SearchAdapter):
+    """Paginating adapter over ``_default_client`` (daft.ie ``__NEXT_DATA__``).
+
+    Name kept for continuity (referenced in ``__main__`` and tests); the fetch
+    backend is now ``curl_cffi`` HTML scraping, not the ``daftlistings`` library.
+    """
+
     def __init__(
         self,
         rate_limit_seconds: float = 2.0,
@@ -168,7 +194,7 @@ class DaftListingsAdapter(SearchAdapter):
                 self._sleep(delay)
                 continue
             except Exception as exc:  # noqa: BLE001
-                raise AdapterError(f"daftlistings failed: {exc!r}") from exc
+                raise AdapterError(f"daft.ie fetch failed: {exc!r}") from exc
         raise AdapterError("rate-limited by daft.ie; backoff exhausted")
 
     def fetch(self, search: Search) -> list[Listing]:
