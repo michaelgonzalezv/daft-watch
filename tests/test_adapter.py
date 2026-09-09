@@ -265,6 +265,65 @@ def test_fetch_paginates_and_maps():
     assert len(slept) >= 1 and all(1.5 <= s <= 2.5 for s in slept)
 
 
+def _next_data_html(listings, total_pages):
+    blob = json.dumps(
+        {"props": {"pageProps": {"listings": listings, "paging": {"totalPages": total_pages}}}}
+    )
+    return f'<script id="__NEXT_DATA__" type="application/json">{blob}</script>'
+
+
+class _FakePwPage:
+    def __init__(self, html): self._html = html
+    def goto(self, *a, **k): pass
+    def wait_for_selector(self, *a, **k): pass
+    def content(self): return self._html
+    def close(self): pass
+
+
+class _FakePwCtx:
+    def __init__(self, htmls):
+        self._htmls = list(htmls)
+        self.navigations = 0
+    def new_page(self):
+        self.navigations += 1
+        return _FakePwPage(self._htmls.pop(0))
+    def storage_state(self, *a, **k): pass
+
+
+def test_client_set_params_resets_pagination_state():
+    from daftwatch.adapter import _default_client
+
+    client = _default_client()
+    client._total_pages = 0  # left over from a prior empty search
+    client.set_params({"location": ["cork-city-cork"]})
+    assert client._total_pages is None
+
+
+def test_reused_client_empty_search_does_not_short_circuit_next_search(monkeypatch):
+    """Search A returns totalPages == 0; search B's page(1) must still navigate."""
+    from daftwatch.adapter import _default_client
+
+    client = _default_client()
+    ctx = _FakePwCtx([
+        _next_data_html([], 0),  # search A, page 1: empty result set
+        _next_data_html([{"listing": {"id": "b1", "price": "€1 per month"}}], 1),  # search B, page 1
+        _next_data_html([], 1),  # search B, page 2: empty -> loop stops
+    ])
+    monkeypatch.setattr(client, "_ensure", lambda: None)
+    client._ctx = ctx
+
+    client.set_category("sharing")
+    client.set_params({"location": ["niche-a"]})
+    assert client.page(1) == []
+    assert client._total_pages == 0
+
+    client.set_params({"location": ["niche-b"]})
+    assert client._total_pages is None  # reset for the new search
+    out = client.page(1)
+    assert [d["id"] for d in out] == ["b1"]
+    assert ctx.navigations == 2  # search B genuinely navigated
+
+
 def test_fetch_stops_at_max_pages():
     full = [{"id": str(i), "price": "€1 per month"} for i in range(3)]
     fake = FakeClient([full] * 50)

@@ -113,7 +113,7 @@ def to_listing(d: dict, category: str) -> Listing:
         source="daft",
         currency="EUR",
         price_native=price,
-        price_weekly=parse_int(price_text) if weekly else None,
+        price_weekly=parse_int(price_text.replace(",", "")) if weekly else None,
         first_published=_iso_from_ms(d.get("publishDate")),
         room_type=room_type,
     )
@@ -210,15 +210,17 @@ def _default_client() -> Any:
     """Adapter-shaped daft.ie scraper backed by headless Chromium (Playwright).
 
     daft.ie sits behind Cloudflare's managed challenge; only a real browser
-    clears it reliably. We launch one headless Chromium per fetch, reuse a
-    persisted storage state (the cf_clearance cookie) across fetches/restarts
-    so most navigations skip the interstitial, read the listings out of the
-    page's ``__NEXT_DATA__`` blob, and tear the browser down in ``close()``.
-    This is the ONLY place the daft.ie fetch details live. ``page(n)`` performs
-    exactly ONE navigation so the adapter's between-page sleep sits between REAL
-    requests and its ``max_pages`` cap genuinely bounds request volume. If
-    daft.ie tightens Cloudflare, options are a newer Chromium, ``channel=
-    "chrome"``, or a longer interstitial wait.
+    clears it reliably. One headless Chromium is launched lazily on the first
+    navigation and REUSED for the whole adapter lifecycle (every search's
+    ``fetch`` plus the detail loop); ``DaftListingsAdapter.close()`` — called by
+    the runner in a ``finally`` — tears it down. A persisted storage state (the
+    cf_clearance cookie) is reused across restarts so most navigations skip the
+    interstitial. ``page(n)`` / ``detail(path)`` each perform exactly ONE
+    navigation so the adapter's between-page sleep sits between REAL requests and
+    its ``max_pages`` cap genuinely bounds request volume. ``set_params`` resets
+    the per-search pagination state so a prior search's ``totalPages`` never
+    short-circuits the next one. If daft.ie tightens Cloudflare, options are a
+    newer Chromium, ``channel="chrome"``, or a longer interstitial wait.
     """
     from playwright.sync_api import sync_playwright
 
@@ -253,6 +255,9 @@ def _default_client() -> Any:
 
         def set_params(self, p: dict) -> None:
             self._params = dict(p)
+            # Reset pagination state: a previous search's totalPages (0 for an
+            # empty result set) must not short-circuit this search's page(1).
+            self._total_pages = None
             _log.info(
                 "search url: %s", _build_url(self._category, self._params, 1)
             )
@@ -375,9 +380,11 @@ class DaftListingsAdapter(SearchAdapter):
             self._client = self._make_client()
         return self._client
 
-    def _with_backoff(self, fn: Callable[[], Any]) -> Any:
+    def _with_backoff(self, op: str, fn: Callable[[], Any]) -> Any:
         """Run ``fn``; on RateLimited sleep the backoff ladder and retry, then
-        give up with AdapterError. Any other error → AdapterError (no retry)."""
+        give up with AdapterError. Any other error → AdapterError (no retry).
+        ``op`` names the operation for the error message (e.g. ``"page 2"``,
+        ``"detail /share/…"``)."""
         for delay in _BACKOFF:
             try:
                 return fn()
@@ -385,15 +392,21 @@ class DaftListingsAdapter(SearchAdapter):
                 self._sleep(delay)
                 continue
             except Exception as exc:  # noqa: BLE001
-                raise AdapterError(f"daft.ie fetch failed: {exc!r}") from exc
-        raise AdapterError("rate-limited by daft.ie; backoff exhausted")
+                raise AdapterError(
+                    f"daft.ie {op} failed: {exc!r}"
+                ) from exc
+        raise AdapterError(
+            f"rate-limited by daft.ie ({op}); backoff exhausted"
+        )
 
     def _page_with_backoff(self, client: Any, n: int) -> list[dict]:
-        return self._with_backoff(lambda: client.page(n))
+        return self._with_backoff(f"page {n}", lambda: client.page(n))
 
     def detail(self, path: str) -> dict:
         client = self._ensure_client()
-        return self._with_backoff(lambda: client.detail(path))
+        return self._with_backoff(
+            f"detail {path}", lambda: client.detail(path)
+        )
 
     def close(self) -> None:
         if self._client is not None:
