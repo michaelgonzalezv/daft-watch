@@ -3,6 +3,7 @@ from __future__ import annotations
 import abc
 import json
 import logging
+import os
 import random
 import re
 import time
@@ -16,10 +17,23 @@ from daftwatch.models import Listing, parse_beds, parse_price
 _BACKOFF = [30, 60, 120, 240, 300]
 _DAFT_BASE = "https://www.daft.ie"
 
+_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+# Where the persisted Playwright storage state (the cf_clearance cookie) lives.
+# Defaults to the Docker data volume; may not be writable for local runs, so
+# every read/write of it is best-effort.
+_STORAGE = os.environ.get("DAFT_WATCH_STATE", "/data/pw-state.json")
+
 _log = logging.getLogger("daftwatch")
 
+# daft.ie now renders the tag as
+#   <script id="__NEXT_DATA__" type="application/json" crossorigin="anonymous">
+# so tolerate any extra attributes after the type before the closing ">".
 _NEXT_DATA_RE = re.compile(
-    r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S
+    r'<script id="__NEXT_DATA__" type="application/json"[^>]*>(.*?)</script>',
+    re.S,
 )
 
 
@@ -117,23 +131,46 @@ def _build_url(category: str, params: dict, n: int) -> str:
 
 
 def _default_client() -> Any:
-    """Adapter-shaped scraper for daft.ie search pages via ``curl_cffi``.
+    """Adapter-shaped daft.ie scraper backed by headless Chromium (Playwright).
 
-    This is the ONLY place the daft.ie fetch details live. ``daftlistings`` and
-    the gateway API are Cloudflare-blocked (403); instead we fetch the normal
-    search HTML with a Chrome TLS fingerprint and read the listings out of the
-    page's ``__NEXT_DATA__`` JSON blob. ``page(n)`` performs exactly ONE HTTP GET
-    so the adapter's between-page sleep sits between REAL requests and its
-    ``max_pages`` cap genuinely bounds request volume. If daft.ie changes its
-    Cloudflare config, bump ``impersonate=`` or the ``__NEXT_DATA__`` selector.
+    daft.ie sits behind Cloudflare's managed challenge; only a real browser
+    clears it reliably. We launch one headless Chromium per fetch, reuse a
+    persisted storage state (the cf_clearance cookie) across fetches/restarts
+    so most navigations skip the interstitial, read the listings out of the
+    page's ``__NEXT_DATA__`` blob, and tear the browser down in ``close()``.
+    This is the ONLY place the daft.ie fetch details live. ``page(n)`` performs
+    exactly ONE navigation so the adapter's between-page sleep sits between REAL
+    requests and its ``max_pages`` cap genuinely bounds request volume. If
+    daft.ie tightens Cloudflare, options are a newer Chromium, ``channel=
+    "chrome"``, or a longer interstitial wait.
     """
-    from curl_cffi import requests as _cffi
+    from playwright.sync_api import sync_playwright
 
     class _Client:
         def __init__(self) -> None:
             self._category = "rent"
             self._params: dict = {}
             self._total_pages: int | None = None
+            self._pw = None
+            self._browser = None
+            self._ctx = None
+
+        def _ensure(self):
+            if self._ctx is not None:
+                return
+            self._pw = sync_playwright().start()
+            self._browser = self._pw.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            kw: dict = {
+                "user_agent": _UA,
+                "viewport": {"width": 1280, "height": 900},
+                "locale": "en-IE",
+            }
+            if os.path.exists(_STORAGE):
+                kw["storage_state"] = _STORAGE
+            self._ctx = self._browser.new_context(**kw)
 
         def set_category(self, c: str) -> None:
             self._category = c
@@ -147,11 +184,33 @@ def _default_client() -> Any:
         def page(self, n: int) -> list[dict]:
             if self._total_pages is not None and n > self._total_pages:
                 return []
+            self._ensure()
             url = _build_url(self._category, self._params, n)
-            r = _cffi.get(url, impersonate="chrome131", timeout=30)
-            if r.status_code in (429, 403):
-                raise RateLimited(f"daft.ie returned {r.status_code}")
-            data = _extract_next_data(r.text)
+            pg = self._ctx.new_page()
+            try:
+                pg.goto(url, wait_until="domcontentloaded", timeout=45000)
+                # Cloudflare interstitial ("Just a moment...") clears itself in
+                # a real browser; wait for the real page's __NEXT_DATA__.
+                try:
+                    # state="attached": a <script> is never "visible", and the
+                    # blob is what we parse, not something rendered.
+                    pg.wait_for_selector(
+                        "script#__NEXT_DATA__",
+                        state="attached",
+                        timeout=25000,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                html = pg.content()
+            finally:
+                pg.close()
+            # persist cookies (cf_clearance) for next time — best effort
+            try:
+                self._ctx.storage_state(path=_STORAGE)
+            except Exception:  # noqa: BLE001
+                pass
+            # raises RateLimited if still challenged (no __NEXT_DATA__)
+            data = _extract_next_data(html)
             # pp / pp["listings"] KeyErrors must stay LOUD: a missing key
             # (schema drift or a 200-with-error-body) becomes KeyError ->
             # AdapterError -> adapter_broken, which skips the GONE sweep and
@@ -164,6 +223,23 @@ def _default_client() -> Any:
                 pass
             return [item["listing"] for item in pp["listings"]]
 
+        def close(self) -> None:
+            for obj, meth in (
+                (self._ctx, "close"),
+                (self._browser, "close"),
+            ):
+                try:
+                    if obj is not None:
+                        getattr(obj, meth)()
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                if self._pw is not None:
+                    self._pw.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._ctx = self._browser = self._pw = None
+
     return _Client()
 
 
@@ -171,7 +247,8 @@ class DaftListingsAdapter(SearchAdapter):
     """Paginating adapter over ``_default_client`` (daft.ie ``__NEXT_DATA__``).
 
     Name kept for continuity (referenced in ``__main__`` and tests); the fetch
-    backend is now ``curl_cffi`` HTML scraping, not the ``daftlistings`` library.
+    backend is now headless Chromium via Playwright, not the ``daftlistings``
+    library.
     """
 
     def __init__(
@@ -199,19 +276,24 @@ class DaftListingsAdapter(SearchAdapter):
 
     def fetch(self, search: Search) -> list[Listing]:
         client = self._make_client()
-        client.set_category(search.category)
-        client.set_params(dict(search.params))
+        try:
+            client.set_category(search.category)
+            client.set_params(dict(search.params))
 
-        listings: list[Listing] = []
-        prev_count: int | None = None
-        for n in range(1, self._max_pages + 1):
-            if n > 1:
-                self._sleep(self._rate + random.uniform(-0.5, 0.5))
-            page = self._page_with_backoff(client, n)
-            if not page:
-                break
-            listings.extend(to_listing(d, search.category) for d in page)
-            if prev_count is not None and len(page) < prev_count:
-                break
-            prev_count = len(page)
-        return listings
+            listings: list[Listing] = []
+            prev_count: int | None = None
+            for n in range(1, self._max_pages + 1):
+                if n > 1:
+                    self._sleep(self._rate + random.uniform(-0.5, 0.5))
+                page = self._page_with_backoff(client, n)
+                if not page:
+                    break
+                listings.extend(to_listing(d, search.category) for d in page)
+                if prev_count is not None and len(page) < prev_count:
+                    break
+                prev_count = len(page)
+            return listings
+        finally:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
