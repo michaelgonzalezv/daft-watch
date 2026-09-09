@@ -73,9 +73,10 @@ def run_cycle(
 
     # 2. detail-fetch cheap, not-yet-enriched candidates (enriches the DB
     #    regardless of whether publishing is configured)
+    consecutive_failures = 0
     for lid in store.needs_detail(config.detail_price_cap, config.detail_max_per_cycle):
         listing = store.get_listing(lid)
-        url = listing.url if listing else ""
+        url = (listing.url if listing else "") or ""
         path = url[len(_DAFT_BASE):] if url.startswith(_DAFT_BASE) else url
         if not path:
             logger.warning("no url for listing %s; skipping detail fetch", lid)
@@ -87,7 +88,17 @@ def run_cycle(
             break
         except AdapterError:
             logger.exception("detail fetch failed for %s", lid)
+            consecutive_failures += 1
+            if consecutive_failures >= 3:
+                # A systemic Cloudflare block is not a per-listing problem, and
+                # each AdapterError has already burned the full backoff ladder
+                # (~750s). Stop before the loop overruns the cycle cadence.
+                logger.warning(
+                    "detail loop: 3 consecutive failures, stopping this cycle"
+                )
+                break
             continue
+        consecutive_failures = 0
         store.apply_detail(lid, parse_detail(detail))
 
     # 3. export the active set as listings.json and commit it (publish only)

@@ -376,6 +376,76 @@ def test_detail_rate_limited_breaks_loop_export_still_runs(tmp_path):
     store.close()
 
 
+def test_detail_loop_circuit_breaker(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    pub, repo = _pub(tmp_path)
+    s = Search(name="Cork sharing", category="sharing", params={})
+    shares = [mkshare(str(i), 700) for i in range(10)]
+    adapter = FakeAdapter(
+        {"Cork sharing": shares},
+        details={f"/share/{i}": AdapterError("cf block") for i in range(10)},
+    )
+    notifier = RecordingNotifier()
+    r = run_cycle(cfg([s], publish=pub), store, adapter, notifier,
+                  logging.getLogger("t"))
+    assert len(adapter.detail_calls) == 3  # stopped after 3 consecutive failures
+    assert (repo / "listings.json").exists()  # export still ran
+    assert r.events_sent == 10  # digest still sent
+    store.close()
+
+
+def test_detail_loop_breaker_resets_on_success(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Cork sharing", category="sharing", params={})
+    shares = [mkshare(str(i), 700) for i in range(6)]
+    # fail, fail, ok, fail, fail, fail -> breaker resets at the ok, trips on #6
+    adapter = FakeAdapter(
+        {"Cork sharing": shares},
+        details={
+            "/share/0": AdapterError("x"), "/share/1": AdapterError("x"),
+            "/share/2": {"_overview": {"sharing with": "1"}},
+            "/share/3": AdapterError("x"), "/share/4": AdapterError("x"),
+            "/share/5": AdapterError("x"),
+        },
+    )
+    r = run_cycle(cfg([s]), store, adapter, RecordingNotifier(),
+                  logging.getLogger("t"))
+    assert adapter.detail_calls == [f"/share/{i}" for i in range(6)]
+    assert store.get_listing("2").sharing_with == 1
+    assert r.events_sent == 6
+    store.close()
+
+
+def test_export_write_json_raising_does_not_kill_digest(tmp_path, monkeypatch):
+    store = Store(str(tmp_path / "t.db"))
+    pub, repo = _pub(tmp_path)
+    monkeypatch.setattr(
+        "daftwatch.runner.export.write_json",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    s = Search(name="Cork sharing", category="sharing", params={})
+    adapter = FakeAdapter({"Cork sharing": [mkshare("1", 700)]})
+    notifier = RecordingNotifier()
+    r = run_cycle(cfg([s], publish=pub), store, adapter, notifier,
+                  logging.getLogger("t"))
+    assert r.events_sent == 1
+    assert len(notifier.digests[0]) == 1
+    store.close()
+
+
+def test_detail_loop_skips_empty_url(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Cork sharing", category="sharing", params={})
+    blank = mkshare("1", 700)
+    object.__setattr__(blank, "url", None)  # NULL url column round-trips as None
+    adapter = FakeAdapter({"Cork sharing": [blank, mkshare("2", 700)]})
+    r = run_cycle(cfg([s]), store, adapter, RecordingNotifier(),
+                  logging.getLogger("t"))
+    assert adapter.detail_calls == ["/share/2"]  # id 1 skipped, no crash
+    assert r.events_sent == 2
+    store.close()
+
+
 def test_loop_closes_adapter_each_iteration(tmp_path):
     store = Store(str(tmp_path / "t.db"))
     s = Search(name="s1", category="rent", params={})
