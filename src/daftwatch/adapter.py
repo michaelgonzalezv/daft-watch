@@ -137,7 +137,12 @@ def _default_client() -> Any:
                 raise RateLimited(f"daft.ie returned {r.status_code}")
             r.raise_for_status()
             body = r.json()
-            return [item["listing"] for item in body.get("listings", [])]
+            # body["listings"] must stay loud: a missing key (schema drift or a
+            # 200-with-error-body) becomes KeyError -> AdapterError ->
+            # adapter_broken, which skips the GONE sweep and fires the
+            # broken-scraper alert. A silent [] would route into a mass
+            # false-GONE digest after gone_after_cycles.
+            return [item["listing"] for item in body["listings"]]
 
     return _Client()
 

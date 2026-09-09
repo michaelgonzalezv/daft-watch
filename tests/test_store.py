@@ -23,6 +23,7 @@ def test_schema_stamps_user_version(store):
 
 
 def test_raw_json_persisted_on_insert_and_update(store):
+    import dataclasses
     import json
     store.begin_cycle()
     store.sync("s1", [mk("1", price=1000)])
@@ -31,11 +32,12 @@ def test_raw_json_persisted_on_insert_and_update(store):
     ).fetchone()[0]
     assert json.loads(raw) == {"x": 1}
     store.begin_cycle()
-    store.sync("s1", [mk("1", price=1100)])
+    updated = dataclasses.replace(mk("1", price=1100), raw={"x": 2, "updated": True})
+    store.sync("s1", [updated])
     raw2 = store._db.execute(
         "SELECT raw_json FROM listings WHERE id=?", ("1",)
     ).fetchone()[0]
-    assert json.loads(raw2) == {"x": 1}
+    assert json.loads(raw2) == {"x": 2, "updated": True}
 
 
 def test_first_sight_emits_new(store):
