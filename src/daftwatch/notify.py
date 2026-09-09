@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import smtplib
+import ssl
 from email.message import EmailMessage
 
 from daftwatch.config import SmtpConfig
@@ -24,9 +25,9 @@ class EmailNotifier:
         msg["To"] = self._smtp.recipient
         msg["Subject"] = subject
         msg.set_content(body)
-        server = self._smtplib.SMTP(self._smtp.host, self._smtp.port)
+        server = self._smtplib.SMTP(self._smtp.host, self._smtp.port, timeout=30)
         try:
-            server.starttls()
+            server.starttls(context=ssl.create_default_context())
             server.login(self._smtp.user, self._smtp.password)
             server.send_message(msg)
         finally:

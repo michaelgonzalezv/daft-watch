@@ -39,7 +39,7 @@ def parse_price(text: str) -> int:
 def parse_beds(text: str | int | None) -> int | None:
     if text is None:
         return None
-    if isinstance(text, int):
-        return text
+    if isinstance(text, (int, float)):
+        return int(text)
     m = _BEDS.search(text)
     return int(m.group(1)) if m else None

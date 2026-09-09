@@ -50,6 +50,12 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
     except KeyError as exc:
         print(f"missing required environment variable: {exc}", file=sys.stderr)
         return 2
+    except FileNotFoundError as exc:
+        print(f"configuration file not found: {exc}", file=sys.stderr)
+        return 2
+    except (ValueError, OSError) as exc:
+        print(f"configuration error: {exc}", file=sys.stderr)
+        return 2
 
     try:
         if args.command == "run":

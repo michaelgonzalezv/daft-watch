@@ -7,15 +7,15 @@ from daftwatch.notify import EmailNotifier
 class FakeSMTP:
     instances = []
 
-    def __init__(self, host, port):
-        self.host, self.port = host, port
+    def __init__(self, host, port, timeout=None):
+        self.host, self.port, self.timeout = host, port, timeout
         self.tls = False
         self.logged_in = None
         self.sent = []
         self.quit_called = False
         FakeSMTP.instances.append(self)
 
-    def starttls(self): self.tls = True
+    def starttls(self, context=None): self.tls = True; self.tls_context = context
     def login(self, u, p): self.logged_in = (u, p)
     def send_message(self, msg): self.sent.append(msg)
     def quit(self): self.quit_called = True
@@ -60,6 +60,21 @@ def test_send_digest_builds_one_email():
     body = msg.get_content()
     assert "https://daft.ie/1" in body
     assert "2200" in body and "2000" in body
+
+
+def test_send_uses_verified_tls_context_and_timeout():
+    import ssl
+    n = EmailNotifier(smtp_cfg(), smtplib_module=FakeSmtplib)
+    n.send_alert("x", "y")
+    smtp = FakeSMTP.instances[0]
+    assert smtp.timeout == 30
+    assert isinstance(smtp.tls_context, ssl.SSLContext)
+    assert smtp.tls_context.verify_mode == ssl.CERT_REQUIRED
+    assert smtp.tls_context.check_hostname is True
+
+
+def test_smtp_password_not_in_repr():
+    assert "pw" not in repr(smtp_cfg())
 
 
 def test_send_digest_empty_is_noop():

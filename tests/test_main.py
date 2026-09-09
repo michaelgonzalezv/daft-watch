@@ -42,3 +42,19 @@ def test_missing_smtp_env_returns_nonzero(tmp_path):
     rc = main(["run", "--config", str(cfg), "--db", str(tmp_path / "d.db")],
               env={"SMTP_HOST": "h"})
     assert rc != 0
+
+
+def test_missing_config_file_returns_two_no_traceback(tmp_path, capsys):
+    rc = main(["run", "--config", str(tmp_path / "nope.yaml"),
+               "--db", str(tmp_path / "d.db")], env=ENV)
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "not found" in err
+
+
+def test_bad_category_returns_two(tmp_path):
+    p = tmp_path / "config.yaml"
+    p.write_text("searches:\n  - name: x\n    category: sale\n    params: {}\n")
+    rc = main(["run", "--config", str(p), "--db", str(tmp_path / "d.db")], env=ENV)
+    assert rc == 2

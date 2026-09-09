@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS notified (
     event_id INTEGER PRIMARY KEY,
     sent_at TEXT
 );
+PRAGMA user_version = 1;
 """
 
 
@@ -97,7 +99,8 @@ class Store:
                     "first_seen, last_seen, active, missing_cycles) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0)",
                     (l.id, l.category, l.title, l.url, l.price_eur, l.beds, l.baths,
-                     l.property_type, l.area, l.county, l.lat, l.lng, "{}", now, now),
+                     l.property_type, l.area, l.county, l.lat, l.lng,
+                     json.dumps(l.raw, default=str), now, now),
                 )
                 events.append(self._record_event(l.id, "NEW", None, l.price_eur))
                 continue
@@ -106,10 +109,11 @@ class Store:
             was_active = row["active"]
             self._db.execute(
                 "UPDATE listings SET title=?, url=?, price_eur=?, beds=?, baths=?, "
-                "property_type=?, area=?, county=?, lat=?, lng=?, last_seen=?, "
-                "active=1, missing_cycles=0 WHERE id=?",
+                "property_type=?, area=?, county=?, lat=?, lng=?, raw_json=?, "
+                "last_seen=?, active=1, missing_cycles=0 WHERE id=?",
                 (l.title, l.url, l.price_eur, l.beds, l.baths, l.property_type,
-                 l.area, l.county, l.lat, l.lng, now, l.id),
+                 l.area, l.county, l.lat, l.lng, json.dumps(l.raw, default=str),
+                 now, l.id),
             )
             if not was_active:
                 events.append(self._record_event(l.id, "BACK", old_price, l.price_eur))

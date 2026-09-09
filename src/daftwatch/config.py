@@ -39,7 +39,7 @@ class SmtpConfig:
     host: str
     port: int
     user: str
-    password: str
+    password: str = field(repr=False)
     sender: str
     recipient: str
 

@@ -18,6 +18,26 @@ def store(tmp_path):
     s.close()
 
 
+def test_schema_stamps_user_version(store):
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 1
+
+
+def test_raw_json_persisted_on_insert_and_update(store):
+    import json
+    store.begin_cycle()
+    store.sync("s1", [mk("1", price=1000)])
+    raw = store._db.execute(
+        "SELECT raw_json FROM listings WHERE id=?", ("1",)
+    ).fetchone()[0]
+    assert json.loads(raw) == {"x": 1}
+    store.begin_cycle()
+    store.sync("s1", [mk("1", price=1100)])
+    raw2 = store._db.execute(
+        "SELECT raw_json FROM listings WHERE id=?", ("1",)
+    ).fetchone()[0]
+    assert json.loads(raw2) == {"x": 1}
+
+
 def test_first_sight_emits_new(store):
     store.begin_cycle()
     events = store.sync("s1", [mk("1")])

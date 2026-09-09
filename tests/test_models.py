@@ -29,6 +29,10 @@ def test_parse_beds_from_int():
     assert parse_beds(3) == 3
 
 
+def test_parse_beds_from_float():
+    assert parse_beds(2.0) == 2
+
+
 def test_parse_beds_none():
     assert parse_beds(None) is None
     assert parse_beds("Studio") is None

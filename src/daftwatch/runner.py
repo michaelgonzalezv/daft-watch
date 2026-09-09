@@ -35,13 +35,18 @@ def run_cycle(
         try:
             listings = adapter.fetch(search)
         except AdapterError as exc:
-            logger.error("search %r failed: %r", search.name, exc)
+            logger.exception("search %r failed: %r", search.name, exc)
             result.searches_failed.append(search.name)
             result.adapter_broken = True
             continue
         fetched.extend(listings)
         store.sync(search.name, listings)
 
+    # finish_cycle (the GONE sweep) is skipped WHOLESALE when any search failed,
+    # not just for that search's listings: the shipped schema has no
+    # listing<->search table, so "a listing absent from all its searches" (the
+    # spec's GONE rule) is unimplementable. We err toward never emitting a false
+    # GONE; a sustained scraper stall is covered by the broken-scraper alert.
     if not result.adapter_broken:
         store.finish_cycle(config.gone_after_cycles)
 

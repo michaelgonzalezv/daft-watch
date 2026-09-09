@@ -89,3 +89,8 @@ daft.ie changes its site and the `daftlistings` library may lag. Only
 `src/daftwatch/adapter.py` (`_default_client`) knows the library's API —
 that is the single place to fix. You will also get a "scraper may be
 broken" email (at most once per 6 hours) when a search errors.
+
+HTTP calls (daft.ie and SMTP) carry a 30s timeout, so a network stall
+recovers on the next cycle. Note that `restart: unless-stopped` only
+restarts a container that *exits* — it does not act on the heartbeat, which
+is informational unless you add an autoheal sidecar.
