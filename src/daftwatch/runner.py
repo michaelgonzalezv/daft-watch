@@ -39,7 +39,8 @@ def run_cycle(
         fetched.extend(listings)
         store.sync(search.name, listings)
 
-    store.finish_cycle(config.gone_after_cycles)
+    if not result.adapter_broken:
+        store.finish_cycle(config.gone_after_cycles)
 
     allowed_ids = {l.id for l in filters.apply(fetched, config.filters)}
     min_types = set(config.notify.min_event_types)

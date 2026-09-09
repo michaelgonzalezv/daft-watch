@@ -1,5 +1,7 @@
 import logging
 
+import pytest
+
 from daftwatch.adapter import AdapterError, SearchAdapter
 from daftwatch.config import Config, NotifyConfig, Search
 from daftwatch.models import Listing
@@ -91,4 +93,70 @@ def test_min_event_types_gate(tmp_path):
                   FakeAdapter({"s1": [mk("1", 1800)]}), notifier,
                   logging.getLogger("t"))
     assert r.events_sent == 1
+    store.close()
+
+
+class BrokenNotifier:
+    def send_digest(self, items): raise RuntimeError("smtp down")
+    def send_alert(self, s, b): pass
+
+
+def test_no_spurious_gone_on_adapter_failure(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="s1", category="rent", params={})
+    notifier = RecordingNotifier()
+    log = logging.getLogger("t")
+
+    # cycle 1: listing stored active
+    run_cycle(cfg([s]), store, FakeAdapter({"s1": [mk("1", 2000)]}), notifier, log)
+    assert store.get_listing("1") is not None
+
+    # cycle 2: same search fails; gone_after_cycles=1
+    r = run_cycle(cfg([s]), store,
+                  FakeAdapter({"s1": AdapterError("boom")}), notifier, log)
+    assert r.adapter_broken is True
+    sent_types = [ev.type for digest in notifier.digests for ev, _ in digest]
+    assert "GONE" not in sent_types
+    assert store.get_listing("1") is not None
+    active = store._db.execute(
+        "SELECT active FROM listings WHERE id=?", ("1",)
+    ).fetchone()[0]
+    assert active == 1
+    store.close()
+
+
+def test_send_digest_failure_keeps_events_pending(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="s1", category="rent", params={})
+    log = logging.getLogger("t")
+
+    with pytest.raises(RuntimeError):
+        run_cycle(cfg([s]), store, FakeAdapter({"s1": [mk("1", 2000)]}),
+                  BrokenNotifier(), log)
+    assert store.pending_events()  # not marked notified
+
+    notifier = RecordingNotifier()
+    r = run_cycle(cfg([s]), store, FakeAdapter({"s1": [mk("1", 2000)]}),
+                  notifier, log)
+    assert r.events_sent == 1
+    assert len(notifier.digests[0]) == 1
+    store.close()
+
+
+def test_gone_event_bypasses_filter(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="s1", category="rent", params={})
+    notifier = RecordingNotifier()
+    log = logging.getLogger("t")
+
+    # cycle 1: listing present
+    run_cycle(cfg([s]), store, FakeAdapter({"s1": [mk("1", 2000, "Student flat")]}),
+              notifier, log)
+
+    # cycle 2: absent from all searches, filter would exclude everything
+    r = run_cycle(cfg([s], min_types=("GONE",),
+                      filters={"keywords_exclude": ["student"]}),
+                  store, FakeAdapter({"s1": []}), notifier, log)
+    assert r.events_sent == 1
+    assert notifier.digests[-1][0][0].type == "GONE"
     store.close()
