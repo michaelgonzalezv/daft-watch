@@ -6,9 +6,16 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from daftwatch import filters
-from daftwatch.adapter import AdapterError, SearchAdapter
+from daftwatch import export, filters, geo
+from daftwatch.adapter import (
+    _DAFT_BASE,
+    AdapterError,
+    RateLimited,
+    SearchAdapter,
+    parse_detail,
+)
 from daftwatch.config import Config
+from daftwatch.export import _date_desc_key
 from daftwatch.notify import EmailNotifier
 from daftwatch.store import Store
 
@@ -31,6 +38,7 @@ def run_cycle(
     store.begin_cycle()
 
     fetched: list = []
+    city_by_id: dict[str, str | None] = {}
     for search in config.searches:
         try:
             listings = adapter.fetch(search)
@@ -39,6 +47,9 @@ def run_cycle(
             result.searches_failed.append(search.name)
             result.adapter_broken = True
             continue
+        city = geo.city_of(search.name)
+        for l in listings:
+            city_by_id[l.id] = city
         fetched.extend(listings)
         store.sync(search.name, listings)
 
@@ -49,6 +60,51 @@ def run_cycle(
     # GONE; a sustained scraper stall is covered by the broken-scraper alert.
     if not result.adapter_broken:
         store.finish_cycle(config.gone_after_cycles)
+
+    # 1. persist resolved city + centre distance for every synced listing
+    for lid, city in city_by_id.items():
+        store.set_city(lid, city)
+        listing = store.get_listing(lid)
+        if listing is None:
+            continue
+        dist = geo.distance_to_centre(listing.lat, listing.lng, city)
+        if dist is not None:
+            store.set_distances(lid, {"centre": dist})
+
+    # 2. detail-fetch cheap, not-yet-enriched candidates (enriches the DB
+    #    regardless of whether publishing is configured)
+    for lid in store.needs_detail(config.detail_price_cap, config.detail_max_per_cycle):
+        listing = store.get_listing(lid)
+        url = listing.url if listing else ""
+        path = url[len(_DAFT_BASE):] if url.startswith(_DAFT_BASE) else url
+        if not path:
+            logger.warning("no url for listing %s; skipping detail fetch", lid)
+            continue
+        try:
+            detail = adapter.detail(path)
+        except RateLimited:
+            logger.warning("detail rate-limited; stopping detail loop this cycle")
+            break
+        except AdapterError:
+            logger.exception("detail fetch failed for %s", lid)
+            continue
+        store.apply_detail(lid, parse_detail(detail))
+
+    # 3. export the active set as listings.json and commit it (publish only)
+    if config.publish is not None:
+        try:
+            now = datetime.now(timezone.utc)
+            export.write_json(
+                config.publish.json_path, store.active_listings(), now.isoformat()
+            )
+            export.git_publish(
+                config.publish.repo_dir,
+                config.publish.file_rel,
+                f"data: rentals listings {now:%Y-%m-%d %H:%M}",
+                config.publish.git_push,
+            )
+        except Exception:
+            logger.exception("export/publish failed")
 
     allowed_ids = {l.id for l in filters.apply(fetched, config.filters)}
     min_types = set(config.notify.min_event_types)
@@ -63,6 +119,20 @@ def run_cycle(
         if listing is None:
             continue
         to_send.append((event, listing))
+
+    # 4. curate: drop what is too far from its city centre, sort price-asc
+    #    then newest-first.
+    if to_send:
+        kept = {
+            l.id
+            for l in filters.within_distance(
+                [l for _, l in to_send], config.email_distance_km
+            )
+        }
+        to_send = [(e, l) for (e, l) in to_send if l.id in kept]
+        to_send.sort(
+            key=lambda p: (p[1].price_eur, _date_desc_key(p[1].first_published))
+        )
 
     if to_send:
         try:
@@ -107,6 +177,12 @@ def loop(
                     last_alert = now
         except Exception:
             logger.exception("run_cycle raised; continuing after sleep")
+        finally:
+            # Tear the adapter's browser down between cycles so a hung Chromium
+            # never persists; the next run_cycle lazily recreates it.
+            close = getattr(adapter, "close", None)
+            if callable(close):
+                close()
 
         if heartbeat_path:
             Path(heartbeat_path).write_text(

@@ -1,12 +1,18 @@
+import json
 import logging
+import subprocess
 
 import pytest
 
-from daftwatch.adapter import AdapterError, SearchAdapter
-from daftwatch.config import Config, NotifyConfig, Search
+from daftwatch.adapter import AdapterError, RateLimited, SearchAdapter
+from daftwatch.config import Config, NotifyConfig, PublishConfig, Search
 from daftwatch.models import Listing
 from daftwatch.store import Store
 from daftwatch.runner import run_cycle
+
+# Cork / Dublin city centres (mirror daftwatch.geo.CENTRES)
+_CORK = (51.8979, -8.4706)
+_DUBLIN = (53.3473, -6.2591)
 
 
 def mk(id, price, title="Flat"):
@@ -15,13 +21,35 @@ def mk(id, price, title="Flat"):
                    area="D8", county="Dublin", lat=None, lng=None, raw={})
 
 
+def mkshare(id, price, lat=_CORK[0], lng=_CORK[1], title="Share"):
+    return Listing(id=id, category="sharing", title=title,
+                   url=f"https://www.daft.ie/share/{id}",
+                   price_eur=price, beds=None, baths=1, property_type="Apartment",
+                   area=None, county=None, lat=lat, lng=lng, raw={})
+
+
 class FakeAdapter(SearchAdapter):
-    def __init__(self, by_search): self.by_search = by_search
+    def __init__(self, by_search, details=None):
+        self.by_search = by_search
+        self.details = details or {}
+        self.detail_calls = []
+        self.closed = 0
+
     def fetch(self, search):
         v = self.by_search[search.name]
         if isinstance(v, Exception):
             raise v
         return v
+
+    def detail(self, path):
+        self.detail_calls.append(path)
+        v = self.details.get(path, {"_overview": {}})
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+    def close(self):
+        self.closed += 1
 
 
 class RecordingNotifier:
@@ -30,10 +58,34 @@ class RecordingNotifier:
     def send_alert(self, s, b): pass
 
 
-def cfg(searches, min_types=("NEW", "PRICE_DROP", "GONE"), filters=None):
+def cfg(searches, min_types=("NEW", "PRICE_DROP", "GONE"), filters=None,
+        publish=None, email_distance_km=None, detail_price_cap=800):
     return Config(searches=list(searches), gone_after_cycles=1,
                   filters=filters or {},
-                  notify=NotifyConfig(min_event_types=list(min_types)))
+                  notify=NotifyConfig(min_event_types=list(min_types)),
+                  detail_price_cap=detail_price_cap,
+                  publish=publish,
+                  email_distance_km=email_distance_km or {})
+
+
+def _init_repo(path):
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t.t"], cwd=path,
+                   check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=path,
+                   check=True, capture_output=True)
+    (path / "seed.txt").write_text("seed")
+    subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=path, check=True,
+                   capture_output=True)
+
+
+def _pub(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    return PublishConfig(json_path=str(repo / "listings.json"), repo_dir=str(repo),
+                         file_rel="listings.json", git_push=False), repo
 
 
 def test_new_listings_are_notified_once(tmp_path):
@@ -214,4 +266,121 @@ def test_loop_survives_run_cycle_exception(tmp_path):
     loop(cfg([s]), store, adapter, ExplodingNotifier(), logging.getLogger("t"),
          sleeper=lambda x: slept.append(x), clock=lambda: 0.0, max_cycles=2)
     assert len(slept) == 2  # kept going despite the exception
+    store.close()
+
+
+# -- Task 9: detail loop, distances, export, curated digest ----------------
+
+def test_full_cycle_detail_and_export(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    pub, repo = _pub(tmp_path)
+    s = Search(name="Cork sharing <=800", category="sharing", params={})
+    adapter = FakeAdapter(
+        {"Cork sharing <=800": [mkshare("1", 700), mkshare("2", 900)]},
+        details={"/share/1": {"_overview": {"sharing with": "3",
+                                            "bedrooms available": "1"},
+                              "description": "Bright room"}},
+    )
+    notifier = RecordingNotifier()
+    r = run_cycle(cfg([s], publish=pub), store, adapter, notifier,
+                  logging.getLogger("t"))
+
+    # only the sub-cap listing gets a detail fetch
+    assert adapter.detail_calls == ["/share/1"]
+    got = store.get_listing("1")
+    assert got.sharing_with == 3
+    assert got.city == "cork"
+    assert got.distances_km["centre"] < 1.0  # sitting on the centre
+
+    # listings.json written + committed
+    data = json.loads((repo / "listings.json").read_text(encoding="utf-8"))
+    assert {rec["id"] for rec in data["listings"]} == {"1", "2"}
+    log = subprocess.run(["git", "log", "--oneline"], cwd=repo,
+                         capture_output=True, text=True).stdout
+    assert "data: rentals listings" in log
+
+    assert r.events_sent == 2
+    store.close()
+
+
+def test_digest_distance_filtered_but_still_exported(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    pub, repo = _pub(tmp_path)
+    far = mkshare("d1", 700, lat=_DUBLIN[0] + 0.072, lng=_DUBLIN[1])  # ~8 km N
+    s = Search(name="Dublin sharing", category="sharing", params={})
+    adapter = FakeAdapter({"Dublin sharing": [far]})
+    notifier = RecordingNotifier()
+    r = run_cycle(cfg([s], publish=pub, email_distance_km={"dublin": 6}),
+                  store, adapter, notifier, logging.getLogger("t"))
+
+    data = json.loads((repo / "listings.json").read_text(encoding="utf-8"))
+    assert [rec["id"] for rec in data["listings"]] == ["d1"]  # exported
+    assert notifier.digests == []  # but not emailed
+    assert r.events_sent == 0
+    store.close()
+
+
+def test_digest_sorted_price_ascending(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Cork sharing", category="sharing", params={})
+    adapter = FakeAdapter({"Cork sharing": [mkshare("a", 900), mkshare("b", 600),
+                                            mkshare("c", 750)]})
+    notifier = RecordingNotifier()
+    run_cycle(cfg([s]), store, adapter, notifier, logging.getLogger("t"))
+    prices = [l.price_eur for _, l in notifier.digests[0]]
+    assert prices == [600, 750, 900]
+    store.close()
+
+
+def test_publish_none_skips_export_but_emails(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="s1", category="rent", params={})
+    adapter = FakeAdapter({"s1": [mk("1", 2000)]})
+    notifier = RecordingNotifier()
+    r = run_cycle(cfg([s]), store, adapter, notifier, logging.getLogger("t"))
+    assert r.events_sent == 1
+    assert not (tmp_path / "repo").exists()
+    store.close()
+
+
+def test_detail_adapter_error_is_isolated(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Cork sharing", category="sharing", params={})
+    adapter = FakeAdapter(
+        {"Cork sharing": [mkshare("1", 700), mkshare("2", 750)]},
+        details={"/share/1": AdapterError("boom"),
+                 "/share/2": {"_overview": {"sharing with": "2"}}},
+    )
+    notifier = RecordingNotifier()
+    r = run_cycle(cfg([s]), store, adapter, notifier, logging.getLogger("t"))
+    assert adapter.detail_calls == ["/share/1", "/share/2"]
+    assert store.get_listing("2").sharing_with == 2
+    assert r.events_sent == 2
+    store.close()
+
+
+def test_detail_rate_limited_breaks_loop_export_still_runs(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    pub, repo = _pub(tmp_path)
+    s = Search(name="Cork sharing", category="sharing", params={})
+    adapter = FakeAdapter(
+        {"Cork sharing": [mkshare("1", 700), mkshare("2", 750)]},
+        details={"/share/1": RateLimited("429")},
+    )
+    notifier = RecordingNotifier()
+    r = run_cycle(cfg([s], publish=pub), store, adapter, notifier,
+                  logging.getLogger("t"))
+    assert adapter.detail_calls == ["/share/1"]  # loop broke
+    assert (repo / "listings.json").exists()
+    assert r.events_sent == 2
+    store.close()
+
+
+def test_loop_closes_adapter_each_iteration(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="s1", category="rent", params={})
+    adapter = FakeAdapter({"s1": [mk("1", 2000)]})
+    loop(cfg([s]), store, adapter, CountingNotifier(), logging.getLogger("t"),
+         sleeper=lambda x: None, clock=lambda: 0.0, max_cycles=2)
+    assert adapter.closed == 2
     store.close()
