@@ -69,6 +69,7 @@ cycle summarising all changes.
 
 ```bash
 pip install -r requirements.txt
+playwright install chromium
 pip install --no-deps .
 export $(grep -v '^#' .env | xargs)
 python -m daftwatch run --config config.yaml --db data/daft.db      # one cycle
@@ -79,27 +80,34 @@ python -m daftwatch loop --config config.yaml --db data/daft.db --heartbeat data
 
 ```bash
 pip install -r requirements.txt
+playwright install chromium
 pytest -v
-pytest -v -m live      # optional: hits the real site
+pytest -v -m live      # optional: launches Chromium against the real site
 ```
 
 ## If it stops finding listings
 
-The fetch path is `curl_cffi` (a Chrome TLS fingerprint, `impersonate="chrome131"`)
-fetching daft.ie's normal search HTML pages and reading the listings out of the
-page's `<script id="__NEXT_DATA__">` JSON blob (`props.pageProps.listings` /
-`.paging`). The old `daftlistings` gateway API is Cloudflare-blocked (403) and no
-longer used.
+The fetch path is headless Chromium driven by Playwright. daft.ie sits behind
+Cloudflare's managed challenge and only a real browser clears it reliably; one
+headless Chromium is launched per fetch, it navigates the normal search pages,
+and the listings are read out of the page's `<script id="__NEXT_DATA__">` JSON
+blob (`props.pageProps.listings` / `.paging`). The `cf_clearance` cookie is
+persisted to `/data/pw-state.json` (override with `DAFT_WATCH_STATE`) and reused
+across fetches and restarts so most navigations skip the interstitial. The old
+`daftlistings` gateway API is Cloudflare-blocked (403) and no longer used.
 
 Only `src/daftwatch/adapter.py` (`_default_client` / `_extract_next_data` /
 `_build_url`) knows these details — that is the single place to fix. If daft.ie
-tightens its Cloudflare config, bump the `impersonate=` target (`chrome131` → a
-newer profile) or adjust the `__NEXT_DATA__` selector. A Cloudflare "Security
-Check" page is treated as transient (backoff + retry), not a broken scraper. You
-will also get a "scraper may be broken" email (at most once per 6 hours) when a
-search errors for real (e.g. the JSON shape changed).
+tightens its Cloudflare config, options are a newer bundled Chromium, switching
+to the installed Google Chrome (`channel="chrome"`), a longer interstitial wait,
+or adjusting the `__NEXT_DATA__` selector. A Cloudflare "Security Check" page is
+treated as transient (backoff + retry), not a broken scraper. You will also get
+a "scraper may be broken" email (at most once per 6 hours) when a search errors
+for real (e.g. the JSON shape changed).
 
-HTTP calls (daft.ie and SMTP) carry a 30s timeout, so a network stall
-recovers on the next cycle. Note that `restart: unless-stopped` only
+The Docker image bundles Chromium and its OS libraries, so it is ~500-700MB.
+
+Network calls are time-bounded (browser navigation ~45s, SMTP 30s), so a
+network stall recovers on the next cycle. Note that `restart: unless-stopped` only
 restarts a container that *exits* — it does not act on the heartbeat, which
 is informational unless you add an autoheal sidecar.
