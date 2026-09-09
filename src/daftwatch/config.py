@@ -25,6 +25,14 @@ class NotifyConfig:
 
 
 @dataclass
+class PublishConfig:
+    json_path: str
+    repo_dir: str
+    file_rel: str
+    git_push: bool = True
+
+
+@dataclass
 class Config:
     interval_minutes: int = 30
     gone_after_cycles: int = 2
@@ -32,6 +40,10 @@ class Config:
     searches: list[Search] = field(default_factory=list)
     filters: dict = field(default_factory=dict)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
+    detail_price_cap: int = 800
+    detail_max_per_cycle: int = 60
+    publish: PublishConfig | None = None
+    email_distance_km: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -78,6 +90,30 @@ def load_config(path: str | os.PathLike) -> Config:
         )
     )
 
+    # Parse publish block (optional)
+    publish = None
+    publish_raw = data.get("publish")
+    if publish_raw is not None:
+        required_keys = {"json_path", "repo_dir", "file_rel"}
+        provided_keys = set(publish_raw.keys())
+        missing_keys = required_keys - provided_keys
+        if missing_keys:
+            missing = ", ".join(sorted(missing_keys))
+            raise ValueError(f"publish block missing required key(s): {missing}")
+        publish = PublishConfig(
+            json_path=publish_raw["json_path"],
+            repo_dir=publish_raw["repo_dir"],
+            file_rel=publish_raw["file_rel"],
+            git_push=publish_raw.get("git_push", True),
+        )
+
+    # Parse email.distance_km (optional)
+    email_distance_km: dict[str, float] = {}
+    email_raw = data.get("email") or {}
+    distance_raw = email_raw.get("distance_km") or {}
+    if distance_raw:
+        email_distance_km = {k: float(v) for k, v in distance_raw.items()}
+
     return Config(
         interval_minutes=data.get("interval_minutes", 30),
         gone_after_cycles=data.get("gone_after_cycles", 2),
@@ -85,4 +121,8 @@ def load_config(path: str | os.PathLike) -> Config:
         searches=searches,
         filters=data.get("filters", {}) or {},
         notify=notify,
+        detail_price_cap=data.get("detail_price_cap", 800),
+        detail_max_per_cycle=data.get("detail_max_per_cycle", 60),
+        publish=publish,
+        email_distance_km=email_distance_km,
     )

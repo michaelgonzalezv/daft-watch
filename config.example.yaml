@@ -3,21 +3,40 @@ gone_after_cycles: 2
 rate_limit_seconds: 2
 
 searches:
-  - name: "Dublin city rent, 1+ bed, <= 2200"
-    category: rent
-    params:
-      location: [dublin-city]
-      min_beds: 1
-      max_price: 2200
-  - name: "House share D6 / D8, <= 900"
+  - name: "Cork sharing <=800"
     category: sharing
     params:
-      location: [dublin-6-dublin, dublin-8-dublin]
-      max_price: 900
+      location: [cork-city]
+      max_price: 800
+  - name: "Limerick sharing <=800"
+    category: sharing
+    params:
+      location: [limerick-city]
+      max_price: 800
+  - name: "Dublin sharing <=800"
+    category: sharing
+    params:
+      location: [dublin-city]
+      max_price: 800
 
-# Deferred: matching rules. Empty = every listing passes.
+detail_price_cap: 800
+detail_max_per_cycle: 60
+
+publish:
+  json_path: "D:/Github/caleta-web/tools/rentals/listings.json"
+  repo_dir: "D:/Github/caleta-web"
+  file_rel: "tools/rentals/listings.json"
+  git_push: true
+
+email:
+  distance_km:
+    dublin: 6
+    cork: 4
+    limerick: 4
+
 filters:
-  keywords_exclude: []
+  max_price: 800
+  max_sharing_with: 4
 
 notify:
-  min_event_types: [NEW, PRICE_DROP, GONE]
+  min_event_types: [NEW, PRICE_DROP]

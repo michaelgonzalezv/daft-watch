@@ -64,3 +64,104 @@ def test_smtp_config_from_env_ok():
     assert s.host == "smtp.example.com"
     assert s.port == 587
     assert s.recipient == "to@example.com"
+
+
+def test_load_config_with_publish_and_email_distance(tmp_path):
+    """Config with full publish and email.distance_km blocks."""
+    p = tmp_path / "config.yaml"
+    p.write_text(textwrap.dedent("""
+        searches:
+          - name: "Cork sharing"
+            category: sharing
+            params: { location: [cork-city], max_price: 800 }
+        detail_price_cap: 750
+        publish:
+          json_path: "D:/Github/caleta-web/tools/rentals/listings.json"
+          repo_dir: "D:/Github/caleta-web"
+          file_rel: "tools/rentals/listings.json"
+          git_push: true
+        email:
+          distance_km:
+            dublin: 6
+            cork: 4
+    """))
+    cfg = load_config(p)
+    assert cfg.detail_price_cap == 750
+    assert cfg.detail_max_per_cycle == 60  # default
+    assert cfg.publish is not None
+    assert cfg.publish.json_path == "D:/Github/caleta-web/tools/rentals/listings.json"
+    assert cfg.publish.repo_dir == "D:/Github/caleta-web"
+    assert cfg.publish.file_rel == "tools/rentals/listings.json"
+    assert cfg.publish.git_push is True
+    assert cfg.email_distance_km == {"dublin": 6.0, "cork": 4.0}
+
+
+def test_load_config_without_publish_email_detail(tmp_path):
+    """Config without publish, email, or detail keys uses defaults."""
+    p = tmp_path / "config.yaml"
+    p.write_text(textwrap.dedent("""
+        searches:
+          - name: "Dublin rent"
+            category: rent
+            params: { location: [dublin-city] }
+    """))
+    cfg = load_config(p)
+    assert cfg.publish is None
+    assert cfg.email_distance_km == {}
+    assert cfg.detail_price_cap == 800
+    assert cfg.detail_max_per_cycle == 60
+
+
+def test_load_config_publish_git_push_false(tmp_path):
+    """publish.git_push can be explicitly set to false."""
+    p = tmp_path / "config.yaml"
+    p.write_text(textwrap.dedent("""
+        searches: []
+        publish:
+          json_path: "path.json"
+          repo_dir: "dir"
+          file_rel: "file.json"
+          git_push: false
+    """))
+    cfg = load_config(p)
+    assert cfg.publish is not None
+    assert cfg.publish.git_push is False
+
+
+def test_load_config_publish_missing_repo_dir(tmp_path):
+    """publish block missing repo_dir raises ValueError."""
+    p = tmp_path / "config.yaml"
+    p.write_text(textwrap.dedent("""
+        searches: []
+        publish:
+          json_path: "path.json"
+          file_rel: "file.json"
+    """))
+    with pytest.raises(ValueError, match="repo_dir"):
+        load_config(p)
+
+
+def test_load_config_publish_missing_json_path(tmp_path):
+    """publish block missing json_path raises ValueError."""
+    p = tmp_path / "config.yaml"
+    p.write_text(textwrap.dedent("""
+        searches: []
+        publish:
+          repo_dir: "dir"
+          file_rel: "file.json"
+    """))
+    with pytest.raises(ValueError, match="json_path"):
+        load_config(p)
+
+
+def test_load_config_publish_missing_file_rel(tmp_path):
+    """publish block missing file_rel raises ValueError."""
+    p = tmp_path / "config.yaml"
+    p.write_text(textwrap.dedent("""
+        searches: []
+        publish:
+          json_path: "path.json"
+          repo_dir: "dir"
+    """))
+    with pytest.raises(ValueError, match="file_rel"):
+        load_config(p)
