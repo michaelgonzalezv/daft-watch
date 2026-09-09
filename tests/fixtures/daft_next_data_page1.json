@@ -1,0 +1,80 @@
+{
+ "props": {
+  "pageProps": {
+   "section": "residential-to-rent",
+   "listings": [
+    {
+     "listing": {
+      "id": 6504377,
+      "title": "SAINT VINCENT STREET WEST, Inchicore, Dublin 8",
+      "price": "\u20ac1,495 per month",
+      "propertyType": "Studio",
+      "seoFriendlyPath": "/for-rent/saint-vincent-street-west-inchicore-dublin-8/6504377",
+      "point": {
+       "type": "Point",
+       "coordinates": [
+        -6.3180985106296,
+        53.336959664962
+       ]
+      },
+      "sections": [
+       "Property",
+       "Residential",
+       "Studio Apartment"
+      ],
+      "saleType": [
+       "To Let"
+      ],
+      "category": "Rent",
+      "daftShortcode": "26504377",
+      "publishDate": 1788825600000,
+      "state": "PUBLISHED",
+      "numBathrooms": "1 bath"
+     },
+     "savedAd": false,
+     "imageRestricted": false
+    },
+    {
+     "listing": {
+      "id": 6618514,
+      "title": "Heyday Student Living, Carman's Hall, The Liberties, Dublin, D08 V22H, Ireland , Dublin 8",
+      "price": "From \u20ac305 per week",
+      "numBedrooms": "1 bed",
+      "propertyType": "Private Rental Sector",
+      "seoFriendlyPath": "/for-rent/heyday-student-living-carmans-hall-the-liberties-dublin-d08-v22h-ireland-dublin-8/6618514",
+      "point": {
+       "type": "Point",
+       "coordinates": [
+        -6.275637647916881,
+        53.33777790919868
+       ]
+      },
+      "sections": [
+       "Property",
+       "Private Rental Sector"
+      ],
+      "saleType": [
+       "To Let"
+      ],
+      "category": "Rent",
+      "daftShortcode": "96618514",
+      "publishDate": 1783935704000,
+      "state": "PUBLISHED"
+     },
+     "savedAd": false,
+     "imageRestricted": false
+    }
+   ],
+   "paging": {
+    "totalPages": 1,
+    "currentPage": 1,
+    "nextFrom": 20,
+    "previousFrom": 0,
+    "displayingFrom": 1,
+    "displayingTo": 2,
+    "totalResults": 2,
+    "pageSize": 20
+   }
+  }
+ }
+}

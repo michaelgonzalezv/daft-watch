@@ -2,38 +2,50 @@ import json
 from pathlib import Path
 
 import pytest
-from daftwatch.adapter import SearchAdapter, AdapterError, RateLimited, to_listing
+from daftwatch.adapter import (
+    AdapterError,
+    RateLimited,
+    SearchAdapter,
+    _build_url,
+    _extract_next_data,
+    to_listing,
+)
 
 FIX = Path(__file__).parent / "fixtures"
 
-# NOTE: daft_rent_page1.json is HAND-BUILT to the daftlistings 2.0.5 inner
-# `listing` schema (`Listing.as_dict()` == raw_gateway_result["listing"]).
-# A live capture is 403-blocked from CI; replace with a real
-# `Daft().search(max_pages=1)[0].as_dict()` capture once run from a non-blocked
-# network.
+# daft_next_data_page1.json is a REAL 2-listing capture of a daft.ie search
+# page's __NEXT_DATA__ blob: full {"props":{"pageProps":{...}}} shape, one
+# monthly studio (synthetic numBathrooms added) and one weekly PRS 1-bed.
 
 
-def test_to_listing_monthly_real_keys():
-    d = json.loads((FIX / "daft_rent_page1.json").read_text())[0]
-    l = to_listing(d, "rent")
-    assert l.id == "5001"
+def _listing(i: int) -> dict:
+    data = json.loads((FIX / "daft_next_data_page1.json").read_text(encoding="utf-8"))
+    return data["props"]["pageProps"]["listings"][i]["listing"]
+
+
+def test_to_listing_monthly_studio_real_keys():
+    src = _listing(0)
+    l = to_listing(src, "rent")
+    assert isinstance(l.id, str) and l.id == "6504377"
     assert l.category == "rent"
-    assert l.price_eur == 2100
-    assert l.beds == 2
-    assert l.baths == 1
-    assert l.property_type == "Apartment"
-    # seoFriendlyPath is relative -> URL must be absolute
-    assert l.url == "https://www.daft.ie/for-rent/apartment-rialto-dublin-8/5001234"
-    assert l.lat == 53.3331
-    assert l.lng == -6.2925
+    assert l.price_eur == 1495  # "€1,495 per month"
+    assert l.beds is None  # numBedrooms absent for studios
+    assert l.baths == 1  # "1 bath"
+    assert l.property_type == "Studio"  # propertyType, not category ("Rent")
+    assert l.url.startswith("https://www.daft.ie/")
+    assert l.url.endswith(src["seoFriendlyPath"])
+    assert l.lat == pytest.approx(53.337, abs=1e-2)
+    assert l.lng == pytest.approx(-6.318, abs=1e-2)
 
 
-def test_to_listing_weekly_converts_and_studio_has_no_beds():
-    d = json.loads((FIX / "daft_rent_page1.json").read_text())[1]
-    l = to_listing(d, "rent")
-    assert l.price_eur == round(425 * 52 / 12)
-    assert l.beds is None  # "Studio" -> no number
-    assert l.baths is None  # numBathrooms key absent
+def test_to_listing_weekly_prs_converts_price():
+    src = _listing(1)
+    l = to_listing(src, "rent")
+    assert l.price_eur == round(305 * 52 / 12)  # "From €305 per week"
+    assert l.beds == 1  # "1 bed"
+    assert l.baths is None  # numBathrooms absent
+    assert l.property_type == "Private Rental Sector"
+    assert l.url.endswith(src["seoFriendlyPath"])
 
 
 def test_to_listing_tolerates_missing_keys():
@@ -44,6 +56,41 @@ def test_to_listing_tolerates_missing_keys():
     assert l.url == ""
     assert l.lat is None
     assert l.property_type is None
+
+
+def test_extract_next_data_parses_valid_html():
+    blob = '{"props": {"pageProps": {"listings": [], "paging": {"totalPages": 1}}}}'
+    html = (
+        '<html><body><script id="__NEXT_DATA__" type="application/json">'
+        + blob
+        + "</script></body></html>"
+    )
+    data = _extract_next_data(html)
+    assert data["props"]["pageProps"]["listings"] == []
+
+
+def test_extract_next_data_raises_ratelimited_on_challenge_page():
+    with pytest.raises(RateLimited):
+        _extract_next_data("<html><body>Security Check | Daft</body></html>")
+
+
+def test_build_url_single_location_in_path():
+    url = _build_url("rent", {"location": ["dublin-8-dublin"], "max_price": 2200}, 1)
+    assert url == (
+        "https://www.daft.ie/property-for-rent/dublin-8-dublin?rentalPrice_to=2200"
+    )
+
+
+def test_build_url_multi_location_and_paging():
+    url = _build_url(
+        "sharing",
+        {"location": ["dublin-8-dublin", "dublin-6-dublin"], "min_beds": 1},
+        3,
+    )
+    assert url == (
+        "https://www.daft.ie/sharing/ireland"
+        "?location=dublin-8-dublin&location=dublin-6-dublin&numBeds_from=1&page=3"
+    )
 
 
 def test_searchadapter_is_abstract():
@@ -127,3 +174,15 @@ def test_fetch_wraps_other_errors_without_retry():
     with pytest.raises(AdapterError):
         a.fetch(Search(name="s", category="rent", params={}))
     assert slept == []  # generic errors are not retried
+
+
+@pytest.mark.live
+def test_default_client_live_hits_daft():
+    """Hits the real daft.ie site; excluded from the default run."""
+    from daftwatch.adapter import _default_client
+
+    client = _default_client()
+    client.set_category("rent")
+    client.set_params({"location": ["dublin-8-dublin"], "max_price": 2200})
+    out = client.page(1)
+    assert isinstance(out, list)
