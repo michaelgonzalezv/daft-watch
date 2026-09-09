@@ -132,3 +132,47 @@ class Store:
             area=row["area"], county=row["county"], lat=row["lat"],
             lng=row["lng"], raw={},
         )
+
+    def finish_cycle(self, gone_after_cycles: int) -> list[Event]:
+        events: list[Event] = []
+        rows = self._db.execute(
+            "SELECT id, price_eur, missing_cycles FROM listings WHERE active = 1"
+        ).fetchall()
+        for row in rows:
+            if row["id"] in self._seen:
+                continue
+            new_missing = row["missing_cycles"] + 1
+            if new_missing >= gone_after_cycles:
+                self._db.execute(
+                    "UPDATE listings SET active = 0, missing_cycles = ? WHERE id = ?",
+                    (new_missing, row["id"]),
+                )
+                events.append(
+                    self._record_event(row["id"], "GONE", row["price_eur"], None)
+                )
+            else:
+                self._db.execute(
+                    "UPDATE listings SET missing_cycles = ? WHERE id = ?",
+                    (new_missing, row["id"]),
+                )
+        self._db.commit()
+        return events
+
+    def pending_events(self) -> list[Event]:
+        rows = self._db.execute(
+            "SELECT e.id, e.listing_id, e.type, e.old_price, e.new_price "
+            "FROM events e LEFT JOIN notified n ON n.event_id = e.id "
+            "WHERE n.event_id IS NULL ORDER BY e.id"
+        ).fetchall()
+        return [
+            Event(r["id"], r["listing_id"], r["type"], r["old_price"], r["new_price"])
+            for r in rows
+        ]
+
+    def mark_notified(self, event_ids: list[int]) -> None:
+        now = _now()
+        self._db.executemany(
+            "INSERT OR IGNORE INTO notified (event_id, sent_at) VALUES (?, ?)",
+            [(eid, now) for eid in event_ids],
+        )
+        self._db.commit()

@@ -105,3 +105,51 @@ def test_back_event_takes_precedence_over_price_change(store):
     assert events[0].type == "BACK"
     assert events[0].old_price == 1000
     assert events[0].new_price == 900
+
+
+def test_gone_after_threshold(store):
+    store.begin_cycle()
+    store.sync("s1", [mk("1")])
+    # cycle 2: absent -> missing_cycles = 1, no event yet
+    store.begin_cycle()
+    store.sync("s1", [])
+    assert store.finish_cycle(2) == []
+    # cycle 3: absent -> missing_cycles = 2 -> GONE
+    store.begin_cycle()
+    store.sync("s1", [])
+    events = store.finish_cycle(2)
+    assert len(events) == 1
+    assert events[0].type == "GONE"
+    assert events[0].listing_id == "1"
+
+
+def test_reappear_after_gone_emits_back(store):
+    store.begin_cycle(); store.sync("s1", [mk("1", price=1000)])
+    store.begin_cycle(); store.sync("s1", []); store.finish_cycle(1)  # GONE now
+    store.begin_cycle()
+    back = store.sync("s1", [mk("1", price=1000)])
+    assert back[0].type == "BACK"
+
+
+def test_pending_events_and_mark_notified(store):
+    store.begin_cycle()
+    evts = store.sync("s1", [mk("1"), mk("2")])
+    pending = store.pending_events()
+    assert {e.listing_id for e in pending} == {"1", "2"}
+    store.mark_notified([pending[0].id])
+    remaining = store.pending_events()
+    assert [e.listing_id for e in remaining] == [pending[1].listing_id]
+    # idempotent
+    store.mark_notified([pending[0].id])
+    assert len(store.pending_events()) == 1
+
+
+def test_seen_this_cycle_across_multiple_searches(store):
+    store.begin_cycle()
+    store.sync("s1", [mk("1")])
+    store.sync("s2", [mk("1"), mk("2")])
+    store.begin_cycle()
+    store.sync("s1", [mk("1")])       # "1" seen via s1
+    store.sync("s2", [])              # s2 empty this cycle
+    gone = store.finish_cycle(1)
+    assert {e.listing_id for e in gone} == {"2"}   # only "2" fully absent
