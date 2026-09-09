@@ -124,6 +124,26 @@ class BoomClient:
     def page(self, n): raise self.exc
 
 
+class CloseTrackingFakeClient(FakeClient):
+    """FakeClient that also records close() calls (the Playwright client has one)."""
+
+    def __init__(self, pages):
+        super().__init__(pages)
+        self.closed = 0
+
+    def close(self):
+        self.closed += 1
+
+
+class CloseTrackingBoomClient(BoomClient):
+    def __init__(self, exc):
+        super().__init__(exc)
+        self.closed = 0
+
+    def close(self):
+        self.closed += 1
+
+
 def _rec_sleeper():
     slept = []
     return slept, (lambda s: slept.append(s))
@@ -176,13 +196,36 @@ def test_fetch_wraps_other_errors_without_retry():
     assert slept == []  # generic errors are not retried
 
 
+def test_fetch_closes_client_when_present():
+    fake = CloseTrackingFakeClient([[{"id": "1", "price": "€1 per month"}]])
+    _, sleeper = _rec_sleeper()
+    a = DaftListingsAdapter(sleeper=sleeper, client_factory=lambda: fake)
+    a.fetch(Search(name="s", category="rent", params={}))
+    assert fake.closed == 1
+
+
+def test_fetch_closes_client_even_when_fetch_raises():
+    boom = CloseTrackingBoomClient(RuntimeError("boom"))
+    _, sleeper = _rec_sleeper()
+    a = DaftListingsAdapter(sleeper=sleeper, client_factory=lambda: boom)
+    with pytest.raises(AdapterError):
+        a.fetch(Search(name="s", category="rent", params={}))
+    assert boom.closed == 1
+
+
 @pytest.mark.live
 def test_default_client_live_hits_daft():
-    """Hits the real daft.ie site; excluded from the default run."""
+    """Launches real headless Chromium against daft.ie; excluded from the default run."""
     from daftwatch.adapter import _default_client
 
     client = _default_client()
-    client.set_category("rent")
-    client.set_params({"location": ["dublin-8-dublin"], "max_price": 2200})
-    out = client.page(1)
-    assert isinstance(out, list)
+    try:
+        client.set_category("rent")
+        client.set_params({"location": ["dublin-8-dublin"], "max_price": 2200})
+        out = client.page(1)
+        assert isinstance(out, list) and out
+        first = out[0]
+        assert isinstance(first, dict)
+        assert "id" in first and "title" in first and "price" in first
+    finally:
+        client.close()
