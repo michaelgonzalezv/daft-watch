@@ -2,28 +2,38 @@ import json
 from pathlib import Path
 
 import pytest
-from daftwatch.adapter import SearchAdapter, AdapterError, to_listing
+from daftwatch.adapter import SearchAdapter, AdapterError, RateLimited, to_listing
 
 FIX = Path(__file__).parent / "fixtures"
 
+# NOTE: daft_rent_page1.json is HAND-BUILT to the daftlistings 2.0.5 inner
+# `listing` schema (`Listing.as_dict()` == raw_gateway_result["listing"]).
+# A live capture is 403-blocked from CI; replace with a real
+# `Daft().search(max_pages=1)[0].as_dict()` capture once run from a non-blocked
+# network.
 
-def test_to_listing_monthly():
+
+def test_to_listing_monthly_real_keys():
     d = json.loads((FIX / "daft_rent_page1.json").read_text())[0]
     l = to_listing(d, "rent")
     assert l.id == "5001"
     assert l.category == "rent"
     assert l.price_eur == 2100
     assert l.beds == 2
+    assert l.baths == 1
     assert l.property_type == "Apartment"
-    assert l.url.endswith("/5001")
+    # seoFriendlyPath is relative -> URL must be absolute
+    assert l.url == "https://www.daft.ie/for-rent/apartment-rialto-dublin-8/5001234"
     assert l.lat == 53.3331
+    assert l.lng == -6.2925
 
 
-def test_to_listing_weekly_converts():
+def test_to_listing_weekly_converts_and_studio_has_no_beds():
     d = json.loads((FIX / "daft_rent_page1.json").read_text())[1]
     l = to_listing(d, "rent")
-    assert l.price_eur == round(400 * 52 / 12)
-    assert l.beds is None
+    assert l.price_eur == round(425 * 52 / 12)
+    assert l.beds is None  # "Studio" -> no number
+    assert l.baths is None  # numBathrooms key absent
 
 
 def test_to_listing_tolerates_missing_keys():
@@ -32,6 +42,8 @@ def test_to_listing_tolerates_missing_keys():
     assert l.price_eur == 0
     assert l.beds is None
     assert l.url == ""
+    assert l.lat is None
+    assert l.property_type is None
 
 
 def test_searchadapter_is_abstract():
@@ -59,10 +71,10 @@ class FakeClient:
 
 
 class BoomClient:
-    def __init__(self, msg): self.msg = msg
+    def __init__(self, exc): self.exc = exc
     def set_category(self, c): pass
     def set_params(self, p): pass
-    def page(self, n): raise RuntimeError(self.msg)
+    def page(self, n): raise self.exc
 
 
 def _rec_sleeper():
@@ -95,17 +107,23 @@ def test_fetch_stops_at_max_pages():
     assert fake.calls == [1, 2, 3, 4]
 
 
-def test_fetch_backoff_then_error_on_429():
+def test_fetch_backoff_then_error_on_rate_limited():
     slept, sleeper = _rec_sleeper()
-    a = DaftListingsAdapter(sleeper=sleeper,
-                            client_factory=lambda: BoomClient("HTTP 429 Too Many"))
+    a = DaftListingsAdapter(
+        sleeper=sleeper,
+        client_factory=lambda: BoomClient(RateLimited("daft.ie returned 429")),
+    )
     with pytest.raises(AdapterError):
         a.fetch(Search(name="s", category="rent", params={}))
     assert slept[:5] == [30, 60, 120, 240, 300]
 
 
-def test_fetch_wraps_other_errors():
-    a = DaftListingsAdapter(sleeper=lambda s: None,
-                            client_factory=lambda: BoomClient("boom"))
+def test_fetch_wraps_other_errors_without_retry():
+    slept, sleeper = _rec_sleeper()
+    a = DaftListingsAdapter(
+        sleeper=sleeper,
+        client_factory=lambda: BoomClient(RuntimeError("boom")),
+    )
     with pytest.raises(AdapterError):
         a.fetch(Search(name="s", category="rent", params={}))
+    assert slept == []  # generic errors are not retried

@@ -1,21 +1,29 @@
 from __future__ import annotations
 
 import abc
+import logging
 import random
 import time
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urljoin
 
 from daftwatch.config import Search
 from daftwatch.models import Listing, parse_beds, parse_price
 
 _BACKOFF = [30, 60, 120, 240, 300]
-_DEFAULT_MAX_PAGES = 20
 _SERVER_PAGE = 50
+_DAFT_BASE = "https://www.daft.ie"
+
+_log = logging.getLogger("daftwatch")
 
 
 class AdapterError(Exception):
     pass
+
+
+class RateLimited(Exception):
+    """Raised by the client when daft.ie answers 429/403 (HTTP layer)."""
 
 
 def _f(value):
@@ -25,20 +33,34 @@ def _f(value):
         return None
 
 
+def _coord(d: dict, idx: int):
+    try:
+        return _f(d["point"]["coordinates"][idx])
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
 def to_listing(d: dict, category: str) -> Listing:
+    """Map one daftlistings 2.0.5 inner ``listing`` dict to our Listing.
+
+    ``d`` is the object daftlistings exposes as ``Listing.as_dict()`` /
+    ``self._result`` == ``raw_gateway_result["listing"]``. Every key is treated
+    as optional so a schema drift degrades fields rather than crashing.
+    """
+    path = d.get("seoFriendlyPath")
     return Listing(
         id=str(d.get("id", "")),
         category=category,
         title=d.get("title") or "",
-        url=d.get("daft_link") or d.get("url") or "",
+        url=urljoin(_DAFT_BASE, path) if path else "",
         price_eur=parse_price(d.get("price") or ""),
-        beds=parse_beds(d.get("bedrooms")),
-        baths=parse_beds(d.get("bathrooms")),
-        property_type=d.get("category"),
-        area=d.get("location") or d.get("area"),
-        county=d.get("county"),
-        lat=_f(d.get("latitude")),
-        lng=_f(d.get("longitude")),
+        beds=parse_beds(d.get("numBedrooms")),
+        baths=parse_beds(d.get("numBathrooms")),
+        property_type=d.get("propertyType"),
+        area=None,
+        county=None,
+        lat=_coord(d, 1),
+        lng=_coord(d, 0),
         raw=d,
     )
 
@@ -52,24 +74,19 @@ class SearchAdapter(abc.ABC):
 def _default_client() -> Any:
     """Adapter-shaped wrapper around daftlistings 2.0.5.
 
-    This is the ONLY place daftlistings API details live. If daftlistings
-    changes, rewrite this function and nothing else. daftlistings does its
-    own pagination inside search(); we fetch once and hand the adapter
-    50-item slices so the adapter's page loop still works.
+    This is the ONLY place daftlistings API details live. ``page(n)`` performs
+    exactly ONE HTTP POST to the daft gateway with the paging offset set to
+    ``n-1``, so the adapter's between-page sleep sits between REAL requests and
+    its ``max_pages`` cap genuinely bounds request volume. If daftlistings
+    changes, rewrite this function and nothing else.
     """
+    import requests
     from daftlistings import Daft, SearchType
 
     class _Client:
         def __init__(self) -> None:
             self._daft = Daft()
-            try:
-                self._daft._HEADER = {
-                    **Daft._HEADER,
-                    "User-Agent": "daft-watch/0.1 (personal listings watcher)",
-                }
-            except Exception:
-                pass
-            self._cache: list[dict] | None = None
+            self._payload: dict | None = None
 
         def set_category(self, c: str) -> None:
             self._daft.set_search_type(
@@ -88,13 +105,39 @@ def _default_client() -> Any:
                 self._daft.set_min_beds(p["min_beds"])
             if "max_beds" in p:
                 self._daft.set_max_beds(p["max_beds"])
+            # Resolve + log what daft actually matched. Daft._get_best_match has
+            # no minimum-score floor, so a typo'd slug silently resolves to the
+            # nearest place; the log line is the only visibility into that.
+            self._payload = self._daft._make_payload()
+            _log.info(
+                "search resolved: section=%s geo=%s",
+                self._payload.get("section"),
+                self._payload.get("geoFilter"),
+            )
 
         def page(self, n: int) -> list[dict]:
-            if self._cache is None:
-                results = self._daft.search(max_pages=_DEFAULT_MAX_PAGES)
-                self._cache = [r.as_dict() for r in results]
-            start = (n - 1) * _SERVER_PAGE
-            return self._cache[start:start + _SERVER_PAGE]
+            payload = dict(self._payload or self._daft._make_payload())
+            payload["paging"] = {
+                "from": str((n - 1) * _SERVER_PAGE),
+                "pagesize": str(_SERVER_PAGE),
+            }
+            r = requests.post(
+                Daft._ENDPOINT,
+                headers={
+                    **Daft._HEADER,
+                    "User-Agent": (
+                        "daft-watch/0.1 (personal listings watcher; "
+                        "+https://github.com)"
+                    ),
+                },
+                json=payload,
+                timeout=30,
+            )
+            if r.status_code in (429, 403):
+                raise RateLimited(f"daft.ie returned {r.status_code}")
+            r.raise_for_status()
+            body = r.json()
+            return [item["listing"] for item in body.get("listings", [])]
 
     return _Client()
 
@@ -116,11 +159,10 @@ class DaftListingsAdapter(SearchAdapter):
         for delay in _BACKOFF:
             try:
                 return client.page(n)
+            except RateLimited:
+                self._sleep(delay)
+                continue
             except Exception as exc:  # noqa: BLE001
-                text = str(exc)
-                if "429" in text or "403" in text:
-                    self._sleep(delay)
-                    continue
                 raise AdapterError(f"daftlistings failed: {exc!r}") from exc
         raise AdapterError("rate-limited by daft.ie; backoff exhausted")
 

@@ -1,26 +1,25 @@
 [
   {
-    "id": "5001",
+    "id": 5001,
     "title": "2 Bed Apartment, Rialto, Dublin 8",
     "price": "€2,100 per month",
-    "bedrooms": "2 Bed",
-    "bathrooms": "1 Bath",
-    "category": "Apartment",
-    "daft_link": "https://www.daft.ie/for-rent/apartment-rialto-dublin-8/5001",
-    "latitude": 53.3331,
-    "longitude": -6.2925,
-    "location": "Rialto, Dublin 8"
+    "numBedrooms": "2 Bed",
+    "numBathrooms": "1 Bath",
+    "propertyType": "Apartment",
+    "seoFriendlyPath": "/for-rent/apartment-rialto-dublin-8/5001234",
+    "point": {"type": "Point", "coordinates": [-6.2925, 53.3331]},
+    "sections": ["Property"],
+    "daftShortcode": "1234567"
   },
   {
-    "id": "5002",
-    "title": "Studio, Portobello",
-    "price": "€400 per week",
-    "bedrooms": "Studio",
-    "bathrooms": "1 Bath",
-    "category": "Studio",
-    "daft_link": "https://www.daft.ie/for-rent/studio-portobello/5002",
-    "latitude": 53.33,
-    "longitude": -6.26,
-    "location": "Portobello, Dublin 8"
+    "id": 5002,
+    "title": "Studio, Portobello, Dublin 8",
+    "price": "€425 per week",
+    "numBedrooms": "Studio",
+    "propertyType": "Studio",
+    "seoFriendlyPath": "/for-rent/studio-portobello-dublin-8/5002345",
+    "point": {"type": "Point", "coordinates": [-6.26, 53.33]},
+    "sections": ["Property"],
+    "daftShortcode": "7654321"
   }
 ]
