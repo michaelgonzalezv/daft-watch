@@ -14,10 +14,6 @@ RUN pip install --no-cache-dir --no-deps .
 USER app
 VOLUME ["/data"]
 
-HEALTHCHECK --interval=5m --timeout=10s --start-period=2m \
-  CMD python -c "import sys,time,os; p='/data/heartbeat'; \
-  sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 3600 else 1)"
+HEALTHCHECK --interval=5m --timeout=10s --start-period=2m CMD python -c "import sys,time,os; p='/data/heartbeat'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 3600 else 1)"
 
-ENTRYPOINT ["python", "-m", "daftwatch", "loop", \
-  "--config", "/data/config.yaml", "--db", "/data/daft.db", \
-  "--heartbeat", "/data/heartbeat"]
+ENTRYPOINT ["python", "-m", "daftwatch", "loop", "--config", "/data/config.yaml", "--db", "/data/daft.db", "--heartbeat", "/data/heartbeat"]

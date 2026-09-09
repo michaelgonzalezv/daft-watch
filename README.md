@@ -15,6 +15,11 @@ terms forbid that.
    App passwords); use that as `SMTP_PASS`.
 2. `mkdir -p data && cp config.example.yaml data/config.yaml`, then edit
    `data/config.yaml`.
+
+   On Linux the container writes to `./data` as your host user. Either run
+   `chmod -R a+rwX data` so it stays writable, or `export UID GID` before
+   `docker compose up` so the compose `user:` mapping matches your host
+   uid/gid.
 3. `docker compose up -d --build`
 4. `docker compose logs -f` to watch it.
 
@@ -67,7 +72,7 @@ pip install -r requirements.txt
 pip install --no-deps .
 export $(grep -v '^#' .env | xargs)
 python -m daftwatch run --config config.yaml --db data/daft.db      # one cycle
-python -m daftwatch loop --config config.yaml --db data/daft.db     # forever
+python -m daftwatch loop --config config.yaml --db data/daft.db --heartbeat data/heartbeat   # forever
 ```
 
 ## Development
