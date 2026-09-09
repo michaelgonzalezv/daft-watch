@@ -85,10 +85,19 @@ pytest -v -m live      # optional: hits the real site
 
 ## If it stops finding listings
 
-daft.ie changes its site and the `daftlistings` library may lag. Only
-`src/daftwatch/adapter.py` (`_default_client`) knows the library's API —
-that is the single place to fix. You will also get a "scraper may be
-broken" email (at most once per 6 hours) when a search errors.
+The fetch path is `curl_cffi` (a Chrome TLS fingerprint, `impersonate="chrome131"`)
+fetching daft.ie's normal search HTML pages and reading the listings out of the
+page's `<script id="__NEXT_DATA__">` JSON blob (`props.pageProps.listings` /
+`.paging`). The old `daftlistings` gateway API is Cloudflare-blocked (403) and no
+longer used.
+
+Only `src/daftwatch/adapter.py` (`_default_client` / `_extract_next_data` /
+`_build_url`) knows these details — that is the single place to fix. If daft.ie
+tightens its Cloudflare config, bump the `impersonate=` target (`chrome131` → a
+newer profile) or adjust the `__NEXT_DATA__` selector. A Cloudflare "Security
+Check" page is treated as transient (backoff + retry), not a broken scraper. You
+will also get a "scraper may be broken" email (at most once per 6 hours) when a
+search errors for real (e.g. the JSON shape changed).
 
 HTTP calls (daft.ie and SMTP) carry a 30s timeout, so a network stall
 recovers on the next cycle. Note that `restart: unless-stopped` only
