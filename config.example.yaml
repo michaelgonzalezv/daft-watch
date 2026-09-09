@@ -1,0 +1,23 @@
+interval_minutes: 30
+gone_after_cycles: 2
+rate_limit_seconds: 2
+
+searches:
+  - name: "Dublin city rent, 1+ bed, <= 2200"
+    category: rent
+    params:
+      location: [dublin-city]
+      min_beds: 1
+      max_price: 2200
+  - name: "House share D6 / D8, <= 900"
+    category: sharing
+    params:
+      location: [dublin-6-dublin, dublin-8-dublin]
+      max_price: 900
+
+# Deferred: matching rules. Empty = every listing passes.
+filters:
+  keywords_exclude: []
+
+notify:
+  min_event_types: [NEW, PRICE_DROP, GONE]
