@@ -64,3 +64,44 @@ def test_seen_set_resets_each_cycle(store):
     store.sync("s2", [mk("2")])
     # "1" was not seen this cycle -> exposed via internal API for Task 4
     assert store.seen_this_cycle() == {"2"}
+
+
+def test_back_event_when_inactive_listing_reappears(store):
+    # First sync: create listing in active state
+    store.begin_cycle()
+    store.sync("s1", [mk("1", price=1000)])
+
+    # Manually mark it as inactive (simulating Task 4 GONE sweep)
+    store._db.execute("UPDATE listings SET active=0 WHERE id=?", ("1",))
+    store._db.commit()
+
+    # Next cycle: listing reappears
+    store.begin_cycle()
+    events = store.sync("s1", [mk("1", price=1000)])
+
+    # Should emit exactly one BACK event
+    assert len(events) == 1
+    assert events[0].type == "BACK"
+    assert events[0].listing_id == "1"
+    assert events[0].old_price == 1000
+    assert events[0].new_price == 1000
+
+
+def test_back_event_takes_precedence_over_price_change(store):
+    # First sync: create listing
+    store.begin_cycle()
+    store.sync("s1", [mk("1", price=1000)])
+
+    # Mark as inactive
+    store._db.execute("UPDATE listings SET active=0 WHERE id=?", ("1",))
+    store._db.commit()
+
+    # Reappear with different price: should emit BACK, not PRICE_DROP/UP
+    store.begin_cycle()
+    events = store.sync("s1", [mk("1", price=900)])
+
+    # BACK should take precedence
+    assert len(events) == 1
+    assert events[0].type == "BACK"
+    assert events[0].old_price == 1000
+    assert events[0].new_price == 900
