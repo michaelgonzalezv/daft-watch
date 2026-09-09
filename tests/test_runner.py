@@ -160,3 +160,58 @@ def test_gone_event_bypasses_filter(tmp_path):
     assert r.events_sent == 1
     assert notifier.digests[-1][0][0].type == "GONE"
     store.close()
+
+
+from daftwatch.runner import loop
+from daftwatch.config import NotifyConfig
+
+
+class CountingNotifier(RecordingNotifier):
+    def __init__(self):
+        super().__init__()
+        self.alerts = []
+    def send_alert(self, s, b): self.alerts.append((s, b))
+
+
+def test_loop_runs_n_cycles_and_heartbeats(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    hb = tmp_path / "hb"
+    s = Search(name="s1", category="rent", params={})
+    adapter = FakeAdapter({"s1": [mk("1", 2000)]})
+    slept = []
+    loop(cfg([s]), store, adapter, CountingNotifier(), logging.getLogger("t"),
+         heartbeat_path=str(hb), sleeper=lambda x: slept.append(x),
+         clock=lambda: 0.0, max_cycles=3)
+    assert len(slept) == 3
+    assert hb.exists()
+    store.close()
+
+
+def test_loop_throttles_broken_alerts(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="s1", category="rent", params={})
+    adapter = FakeAdapter({"s1": AdapterError("boom")})
+    notifier = CountingNotifier()
+    t = [0.0]
+    # advance 1h per cycle; 6h throttle -> alert on cycle 1 and cycle 7
+    loop(cfg([s]), store, adapter, notifier, logging.getLogger("t"),
+         sleeper=lambda x: t.__setitem__(0, t[0] + 3600),
+         clock=lambda: t[0], max_cycles=7)
+    assert len(notifier.alerts) == 2
+    store.close()
+
+
+def test_loop_survives_run_cycle_exception(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+
+    class ExplodingNotifier(CountingNotifier):
+        def send_digest(self, items):
+            raise RuntimeError("smtp down")
+
+    s = Search(name="s1", category="rent", params={})
+    adapter = FakeAdapter({"s1": [mk("1", 2000)]})
+    slept = []
+    loop(cfg([s]), store, adapter, ExplodingNotifier(), logging.getLogger("t"),
+         sleeper=lambda x: slept.append(x), clock=lambda: 0.0, max_cycles=2)
+    assert len(slept) == 2  # kept going despite the exception
+    store.close()

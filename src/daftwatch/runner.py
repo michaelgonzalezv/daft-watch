@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 
 from daftwatch import filters
 from daftwatch.adapter import AdapterError, SearchAdapter
@@ -66,3 +69,42 @@ def run_cycle(
         result.events_sent = len(to_send)
 
     return result
+
+
+_ALERT_THROTTLE_SECONDS = 6 * 3600
+
+
+def loop(
+    config: Config,
+    store: Store,
+    adapter: SearchAdapter,
+    notifier: EmailNotifier,
+    logger: logging.Logger,
+    *,
+    heartbeat_path: str | None = None,
+    sleeper=time.sleep,
+    clock=time.monotonic,
+    max_cycles: int | None = None,
+) -> None:
+    last_alert: float | None = None
+    cycles = 0
+    while max_cycles is None or cycles < max_cycles:
+        cycles += 1
+        try:
+            result = run_cycle(config, store, adapter, notifier, logger)
+            if result.adapter_broken:
+                now = clock()
+                if last_alert is None or now - last_alert >= _ALERT_THROTTLE_SECONDS:
+                    notifier.send_alert(
+                        "scraper may be broken",
+                        "Failed searches: " + ", ".join(result.searches_failed),
+                    )
+                    last_alert = now
+        except Exception:
+            logger.exception("run_cycle raised; continuing after sleep")
+
+        if heartbeat_path:
+            Path(heartbeat_path).write_text(
+                datetime.now(timezone.utc).isoformat(), encoding="utf-8"
+            )
+        sleeper(config.interval_minutes * 60)
