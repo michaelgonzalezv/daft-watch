@@ -359,6 +359,24 @@ def test_detail_adapter_error_is_isolated(tmp_path):
     store.close()
 
 
+def test_detail_none_marks_delisted_without_tripping_breaker(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Cork sharing", category="sharing", params={})
+    shares = [mkshare(str(i), 700) for i in range(5)]
+    adapter = FakeAdapter(
+        {"Cork sharing": shares},
+        # first three were delisted between fetch and detail -> adapter.detail None
+        details={f"/share/{i}": None for i in range(3)},
+    )
+    notifier = RecordingNotifier()
+    run_cycle(cfg([s]), store, adapter, notifier, logging.getLogger("t"))
+    # every candidate visited (a None is not a failure, so no 3-strike break)
+    assert adapter.detail_calls == [f"/share/{i}" for i in range(5)]
+    # all five marked enriched -> needs_detail is now empty (no re-fetch churn)
+    assert store.needs_detail(10_000) == []
+    store.close()
+
+
 def test_detail_loop_circuit_breaker(tmp_path):
     store = Store(str(tmp_path / "t.db"))
     pub, repo = _pub(tmp_path)

@@ -308,7 +308,7 @@ def _default_client() -> Any:
                 pass
             return [item["listing"] for item in pp["listings"]]
 
-        def detail(self, path: str) -> dict:
+        def detail(self, path: str) -> dict | None:
             self._ensure()
             url = urljoin(_DAFT_BASE, path)
             pg = self._ctx.new_page()
@@ -331,8 +331,15 @@ def _default_client() -> Any:
                 pass
             # raises RateLimited if still challenged (no __NEXT_DATA__)
             data = _extract_next_data(html)
-            # LOUD KeyError on schema drift -> AdapterError upstream.
-            listing = data["props"]["pageProps"]["listing"]
+            # props / pageProps missing = real schema drift -> LOUD KeyError
+            # -> AdapterError upstream.
+            pp = data["props"]["pageProps"]
+            listing = pp.get("listing")
+            if listing is None:
+                # Page rendered but has no listing: the ad was delisted between
+                # the search page that surfaced it and this fetch. Not an error
+                # -> signal the caller to skip it.
+                return None
             listing["_overview"] = _overview_map(listing)
             return listing
 
@@ -406,7 +413,7 @@ class DaftListingsAdapter(SearchAdapter):
     def _page_with_backoff(self, client: Any, n: int) -> list[dict]:
         return self._with_backoff(f"page {n}", lambda: client.page(n))
 
-    def detail(self, path: str) -> dict:
+    def detail(self, path: str) -> dict | None:
         client = self._ensure_client()
         return self._with_backoff(
             f"detail {path}", lambda: client.detail(path)

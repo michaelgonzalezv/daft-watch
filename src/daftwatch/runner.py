@@ -112,6 +112,14 @@ def run_cycle(
                 break
             continue
         consecutive_failures = 0
+        if detail is None:
+            # Delisted between the fetch that surfaced it and now. Mark it
+            # enriched-with-nothing so needs_detail stops returning it; the
+            # active/gone sweep drops it from listings.json within
+            # gone_after_cycles.
+            logger.info("listing %s has no detail page (delisted); skipping", lid)
+            store.apply_detail(lid, {})
+            continue
         store.apply_detail(lid, parse_detail(detail))
 
     # 3. export the active set as listings.json and commit it (publish only)
