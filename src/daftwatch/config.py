@@ -73,7 +73,7 @@ def load_config(path: str | os.PathLike) -> Config:
 
     searches: list[Search] = []
     for raw in data.get("searches", []):
-        category = raw["category"] if "category" in raw else raw.get("category", "")
+        category = raw.get("category", "")
         if category not in VALID_CATEGORIES:
             raise ValueError(
                 f"search {raw.get('name')!r} has category {category!r}; "

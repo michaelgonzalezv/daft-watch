@@ -122,10 +122,13 @@ def to_listing(d: dict, category: str) -> Listing:
 def _overview_map(listing: dict) -> dict[str, str]:
     """Flatten a detail page's ``propertyOverview`` list to a ``{label: text}``
     map with lower-cased, stripped labels."""
-    return {
-        item["label"].strip().lower(): (item.get("text") or "").strip()
-        for item in listing.get("propertyOverview") or []
-    }
+    out: dict[str, str] = {}
+    for item in listing.get("propertyOverview") or []:
+        label = item.get("label")
+        if not label:
+            continue  # a malformed overview item must not crash detail()
+        out[label.strip().lower()] = (item.get("text") or "").strip()
+    return out
 
 
 def _yn(text: Any) -> bool | None:

@@ -45,7 +45,7 @@ def _digest_html(items: list[tuple[Event, Listing]], summary: str) -> str:
     rows = []
     for _event, listing in items:
         price = f"{_esc(listing.currency)} {_esc(listing.price_native)}/mo"
-        if listing.price_weekly:
+        if listing.price_weekly is not None:
             price += (
                 f"<br><small>{_esc(listing.currency)} "
                 f"{_esc(listing.price_weekly)}/wk</small>"

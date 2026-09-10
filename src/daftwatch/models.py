@@ -4,8 +4,7 @@ import re
 from dataclasses import dataclass, field
 
 _NUMBER = re.compile(r"(\d[\d,]*)")
-_BEDS = re.compile(r"(\d+)")
-_INT = re.compile(r"(\d+)")
+_INT = re.compile(r"(\d+)")  # also used for bed/bath counts
 _RANGE = re.compile(r"from\s*€?\s*(\d[\d,]*)\s*to\s*€?\s*(\d[\d,]*)", re.IGNORECASE)
 
 
@@ -84,5 +83,5 @@ def parse_beds(text: str | int | None) -> int | None:
         return None
     if isinstance(text, (int, float)):
         return int(text)
-    m = _BEDS.search(text)
+    m = _INT.search(text)
     return int(m.group(1)) if m else None
