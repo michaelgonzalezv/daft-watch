@@ -64,14 +64,27 @@ Watch it: `type data\rentals.log`.
 
 ## Import the scheduled task
 
-From an **Administrator** command prompt in `D:\Github\daft-watch`:
+> Already registered on this machine as **"DaftWatch Rentals"** (30-min repeat,
+> interactive logon). The steps below are for reinstalling or another machine.
+
+From a command prompt in `D:\Github\daft-watch` (no admin needed for an
+`InteractiveToken` task):
 
 ```
 schtasks /create /tn "DaftWatch Rentals" /xml deploy\DaftWatch-Rentals.xml
 ```
 
+`DaftWatch-Rentals.xml` is saved as **UTF-16** — that is what `schtasks /xml`
+requires; do not re-save it as UTF-8.
+
 Or: open **Task Scheduler** → **Action** → **Import Task...** → pick
 `deploy\DaftWatch-Rentals.xml`.
+
+Simplest alternative (fewer options — no 2h cap, no "skip if already running"):
+
+```
+schtasks /create /tn "DaftWatch Rentals" /tr "D:\Github\daft-watch\deploy\run-rentals.bat" /sc minute /mo 30 /f
+```
 
 The task runs as the current interactive user (`InteractiveToken`) — it only
 fires while you are logged on, and needs no stored password. It will not stack
