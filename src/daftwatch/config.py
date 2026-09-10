@@ -30,6 +30,8 @@ class PublishConfig:
     repo_dir: str
     file_rel: str
     git_push: bool = True
+    events_path: str | None = None      # where events.json is written
+    events_rel: str | None = None       # its path inside repo_dir
 
 
 @dataclass
@@ -45,6 +47,8 @@ class Config:
     publish: PublishConfig | None = None
     email_distance_km: dict[str, float] = field(default_factory=dict)
     email_max_price: int | None = None
+    export_gone_within_days: int = 30   # keep off-market listings this long
+    events_history_days: int = 90       # events.json window
 
 
 @dataclass
@@ -106,6 +110,8 @@ def load_config(path: str | os.PathLike) -> Config:
             repo_dir=publish_raw["repo_dir"],
             file_rel=publish_raw["file_rel"],
             git_push=publish_raw.get("git_push", True),
+            events_path=publish_raw.get("events_path"),
+            events_rel=publish_raw.get("events_rel"),
         )
 
     # Parse email.distance_km / email.max_price (both optional)
@@ -130,4 +136,6 @@ def load_config(path: str | os.PathLike) -> Config:
         publish=publish,
         email_distance_km=email_distance_km,
         email_max_price=email_max_price,
+        export_gone_within_days=data.get("export_gone_within_days", 30),
+        events_history_days=data.get("events_history_days", 90),
     )

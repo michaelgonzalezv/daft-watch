@@ -242,6 +242,34 @@ def test_sync_records_previous_price_on_change(store):
     assert store.get_listing("x").previous_price == 650
 
 
+def test_export_listings_includes_recently_gone(store):
+    store.begin_cycle()
+    store.sync("s", [mk_share("keep", 700), mk_share("gone", 650)])
+    store.begin_cycle()
+    store.sync("s", [mk_share("keep", 700)])
+    store.finish_cycle(gone_after_cycles=1)          # 'gone' -> active=0 + GONE
+
+    ex = {l.id: l for l in store.export_listings(gone_within_days=30)}
+    assert set(ex) == {"keep", "gone"}
+    assert ex["keep"].status == "available"
+    assert ex["gone"].status == "off_market"
+    assert ex["gone"].off_market_since is not None
+
+    # a cutoff in the future -> the off-market one drops out
+    assert {l.id for l in store.export_listings(gone_within_days=-1)} == {"keep"}
+
+
+def test_events_history_groups_and_orders(store):
+    store.begin_cycle()
+    store.sync("s", [mk_share("a", 700)])
+    store.begin_cycle()
+    store.sync("s", [mk_share("a", 650)])            # PRICE_DROP
+    h = store.events_history(days=90)
+    assert [e["type"] for e in h["a"]] == ["NEW", "PRICE_DROP"]
+    assert h["a"][1]["old_price"] == 700 and h["a"][1]["new_price"] == 650
+    assert store.events_history(days=-1) == {}
+
+
 def test_raw_json_persisted_on_insert_and_update(store):
     import dataclasses
     import json

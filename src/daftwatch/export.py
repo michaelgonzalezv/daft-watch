@@ -10,20 +10,35 @@ import json
 import logging
 import os
 import subprocess
-from datetime import date
+from datetime import date, datetime, timezone
 
 from .models import Listing
 
 _log = logging.getLogger("daftwatch")
 
 
+def _days_on_market(l: Listing) -> int | None:
+    if not l.first_seen:
+        return None
+    try:
+        start = datetime.fromisoformat(l.first_seen)
+    except ValueError:
+        return None
+    end_iso = l.off_market_since if l.status == "off_market" else None
+    try:
+        end = datetime.fromisoformat(end_iso) if end_iso else datetime.now(timezone.utc)
+    except ValueError:
+        end = datetime.now(timezone.utc)
+    return max(0, (end - start).days)
+
+
 def to_record(l: Listing) -> dict:
     """Project a :class:`Listing` onto the frozen dashboard record.
 
-    Exactly 27 keys. ``distance_centre_km`` comes from
-    ``l.distances_km.get("centre")`` (float or ``None``); every other key is the
-    same-named ``Listing`` attribute. ``owner_occupied`` stays bool/None and
-    ``description`` stays str/None.
+    Exactly 31 keys. ``distance_centre_km`` comes from
+    ``l.distances_km.get("centre")`` (float or ``None``); ``days_on_market`` is
+    derived; every other key is the same-named ``Listing`` attribute.
+    ``owner_occupied`` stays bool/None and ``description`` stays str/None.
     """
     return {
         "id": l.id,
@@ -51,7 +66,11 @@ def to_record(l: Listing) -> dict:
         "lng": l.lng,
         "distance_centre_km": l.distances_km.get("centre"),
         "first_published": l.first_published,
+        "first_seen": l.first_seen,
         "last_updated": l.last_updated,
+        "status": l.status,
+        "off_market_since": l.off_market_since,
+        "days_on_market": _days_on_market(l),
         "description": l.description,
     }
 
@@ -122,15 +141,51 @@ def write_json(path: str, listings: list[Listing], generated_at: str) -> bool:
     return True
 
 
-def git_publish(repo_dir: str, file_rel: str, message: str, push: bool) -> bool:
-    """Stage, commit and optionally push *file_rel* inside *repo_dir*.
+def write_events_json(path: str, history: dict, generated_at: str) -> bool:
+    """Write ``events.json`` (``{"generated_at", "events": {id: [...]}}``).
+
+    Same atomic write + skip-when-unchanged contract as :func:`write_json`:
+    only a real change to ``events`` rewrites the file.
+    """
+    payload = {"generated_at": generated_at, "events": history}
+
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                existing = json.load(fh)
+            new_events = json.loads(json.dumps(history, default=str))
+            if existing.get("events") == new_events:
+                return False
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=1, ensure_ascii=False, default=str)
+            fh.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    return True
+
+
+def git_publish(repo_dir: str, file_rels: list[str], message: str, push: bool) -> bool:
+    """Stage, commit and optionally push *file_rels* inside *repo_dir*.
 
     Returns ``True`` only when a commit was actually made. When staging shows no
     change against HEAD, nothing is committed and it returns ``False`` (no empty
     commits).
 
-    Staging, the no-op check and the commit are all scoped to *file_rel* with a
-    ``-- <pathspec>`` so a commit here never sweeps in unrelated changes the
+    Staging, the no-op check and the commit are all scoped to *file_rels* with a
+    ``-- <pathspec...>`` so a commit here never sweeps in unrelated changes the
     user has staged elsewhere in *repo_dir*.
 
     Before committing, ``git pull --rebase --autostash`` is attempted so a
@@ -146,13 +201,14 @@ def git_publish(repo_dir: str, file_rel: str, message: str, push: bool) -> bool:
     / ``OSError`` is logged at ERROR on the ``daftwatch`` logger and ``False`` is
     returned.
     """
+    rels = list(file_rels)
     try:
         subprocess.run(
-            ["git", "-C", repo_dir, "add", "--", file_rel],
+            ["git", "-C", repo_dir, "add", "--", *rels],
             check=True, capture_output=True,
         )
         if subprocess.run(
-            ["git", "-C", repo_dir, "diff", "--cached", "--quiet", "--", file_rel]
+            ["git", "-C", repo_dir, "diff", "--cached", "--quiet", "--", *rels]
         ).returncode == 0:
             return False
         pull = subprocess.run(
@@ -165,7 +221,7 @@ def git_publish(repo_dir: str, file_rel: str, message: str, push: bool) -> bool:
                 pull.stderr.decode("utf-8", "replace").strip(),
             )
         subprocess.run(
-            ["git", "-C", repo_dir, "commit", "-m", message, "--", file_rel],
+            ["git", "-C", repo_dir, "commit", "-m", message, "--", *rels],
             check=True, capture_output=True,
         )
         if push:

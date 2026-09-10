@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 
 from daftwatch.models import Listing
 
@@ -166,6 +166,7 @@ def _row_to_listing(row: sqlite3.Row) -> Listing:
         room_type=row["room_type"],
         city=row["city"],
         previous_price=row["previous_price"],
+        first_seen=row["first_seen"],
         distances_km=distances,
         detail_fetched=bool(row["detail_fetched"]),
     )
@@ -276,6 +277,62 @@ class Store:
             "SELECT * FROM listings WHERE active = 1 ORDER BY first_seen ASC, id ASC"
         ).fetchall()
         return [_row_to_listing(r) for r in rows]
+
+    def export_listings(self, gone_within_days: int) -> list[Listing]:
+        """Active listings, plus ones that went off-market within
+        *gone_within_days* (so the dashboard can keep watched rooms visible and
+        show when they were taken). Off-market rows carry ``status`` and
+        ``off_market_since``.
+        """
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=gone_within_days)
+        ).isoformat()
+        rows = self._db.execute(
+            "SELECT l.*, ("
+            "  SELECT MAX(e.detected_at) FROM events e"
+            "  WHERE e.listing_id = l.id AND e.type = 'GONE'"
+            ") AS gone_at "
+            "FROM listings l "
+            "WHERE l.active = 1 OR ("
+            "  SELECT MAX(e.detected_at) FROM events e"
+            "  WHERE e.listing_id = l.id AND e.type = 'GONE'"
+            ") >= ? "
+            "ORDER BY l.first_seen ASC, l.id ASC",
+            (cutoff,),
+        ).fetchall()
+        out: list[Listing] = []
+        for r in rows:
+            listing = _row_to_listing(r)
+            if not r["active"]:
+                listing = replace(
+                    listing,
+                    status="off_market",
+                    off_market_since=r["gone_at"] or r["last_seen"],
+                )
+            out.append(listing)
+        return out
+
+    def events_history(self, days: int) -> dict[str, list[dict]]:
+        """All events from the last *days*, grouped by listing id and ordered
+        oldest-first: ``{id: [{type, old_price, new_price, at}, ...]}``.
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        rows = self._db.execute(
+            "SELECT listing_id, type, old_price, new_price, detected_at "
+            "FROM events WHERE detected_at >= ? ORDER BY id ASC",
+            (cutoff,),
+        ).fetchall()
+        out: dict[str, list[dict]] = {}
+        for r in rows:
+            out.setdefault(r["listing_id"], []).append(
+                {
+                    "type": r["type"],
+                    "old_price": r["old_price"],
+                    "new_price": r["new_price"],
+                    "at": r["detected_at"],
+                }
+            )
+        return out
 
     def needs_detail(self, price_cap: int, limit: int | None = None) -> list[str]:
         sql = (

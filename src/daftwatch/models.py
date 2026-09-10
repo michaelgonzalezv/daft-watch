@@ -40,6 +40,9 @@ class Listing:
     room_type: str | None = None
     city: str | None = None
     previous_price: int | None = None
+    first_seen: str | None = None            # when the scraper first saw it
+    status: str = "available"                # "available" | "off_market"
+    off_market_since: str | None = None      # GONE timestamp, when off_market
     distances_km: dict[str, float] = field(default_factory=dict)
     detail_fetched: bool = False
 

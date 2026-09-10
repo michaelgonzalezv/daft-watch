@@ -122,7 +122,7 @@ def run_cycle(
             continue
         store.apply_detail(lid, parse_detail(detail))
 
-    # 3. export the active set as listings.json and commit it (publish only)
+    # 3. export listings.json (+ events.json) and commit them (publish only)
     if config.publish is not None:
         try:
             now = datetime.now(timezone.utc)
@@ -132,19 +132,29 @@ def run_cycle(
             # max_sharing_with: the dashboard has its own adjustable house-size
             # control and wants every price-eligible listing.
             export_listings = filters.apply(
-                store.active_listings(),
+                store.export_listings(config.export_gone_within_days),
                 {k: v for k, v in config.filters.items() if k != "max_sharing_with"},
             )
             wrote = export.write_json(
                 config.publish.json_path, export_listings, now.isoformat()
             )
+
+            rels = [config.publish.file_rel]
+            if config.publish.events_path and config.publish.events_rel:
+                history = store.events_history(config.events_history_days)
+                if export.write_events_json(
+                    config.publish.events_path, history, now.isoformat()
+                ):
+                    wrote = True
+                rels.append(config.publish.events_rel)
+
             if not wrote:
                 # nothing changed on disk -> no commit needed, not a failure
                 result.publish_ok = True
             else:
                 result.publish_ok = export.git_publish(
                     config.publish.repo_dir,
-                    config.publish.file_rel,
+                    rels,
                     f"data: rentals listings {now:%Y-%m-%d %H:%M}",
                     config.publish.git_push,
                 )

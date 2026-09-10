@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from daftwatch.export import to_record, write_json, git_publish
+from daftwatch.export import to_record, write_json, write_events_json, git_publish
 from daftwatch.models import Listing
 
 
@@ -13,7 +13,8 @@ RECORD_KEYS = [
     "price_weekly", "previous_price", "beds", "room_type", "sharing_with", "rooms_available",
     "preferences", "owner_occupied", "available_from", "bathroom_type",
     "property_type", "city", "area", "lat", "lng", "distance_centre_km",
-    "first_published", "last_updated", "description",
+    "first_published", "first_seen", "last_updated", "status", "off_market_since",
+    "days_on_market", "description",
 ]
 
 
@@ -34,9 +35,11 @@ def mk(id="1", price_eur=700, first_published="2026-09-01", **kw):
 def test_to_record_exact_keys():
     rec = to_record(mk(distances_km={"centre": 1.5}))
     assert list(rec.keys()) == RECORD_KEYS
-    assert len(rec) == 27
+    assert len(rec) == 31
     assert rec["country"] == "Ireland"
     assert rec["previous_price"] is None
+    assert rec["status"] == "available"
+    assert rec["off_market_since"] is None
 
 
 def test_to_record_distance_from_centre():
@@ -144,6 +147,23 @@ def test_write_json_none_first_published_sorts_last(tmp_path):
     assert order == ["dated", "none"]
 
 
+# -- write_events_json ----------------------------------------------------
+
+def test_write_events_json_skip_when_unchanged(tmp_path):
+    p = tmp_path / "events.json"
+    h = {"a": [{"type": "NEW", "old_price": None, "new_price": 700,
+                "at": "2026-09-01T00:00:00+00:00"}]}
+    assert write_events_json(str(p), h, "2026-09-01T10:00:00") is True
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["events"] == h
+    # generated_at ignored in the comparison
+    assert write_events_json(str(p), h, "2026-09-09T10:00:00") is False
+    # a new event -> rewrites
+    h2 = {"a": h["a"] + [{"type": "GONE", "old_price": 700, "new_price": None,
+                          "at": "2026-09-05T00:00:00+00:00"}]}
+    assert write_events_json(str(p), h2, "2026-09-05T10:00:00") is True
+
+
 # -- git_publish -----------------------------------------------------------
 
 def _init_repo(path: Path) -> None:
@@ -161,20 +181,20 @@ def _init_repo(path: Path) -> None:
 def test_git_publish_commits_and_skips_unchanged(tmp_path):
     _init_repo(tmp_path)
     (tmp_path / "f.json").write_text('{"a":1}')
-    assert git_publish(str(tmp_path), "f.json", "msg", push=False) is True
+    assert git_publish(str(tmp_path), ["f.json"], "msg", push=False) is True
     log = subprocess.run(["git", "log", "--oneline"], cwd=tmp_path,
                          capture_output=True, text=True).stdout
     assert "msg" in log
 
     # same content -> no commit
-    assert git_publish(str(tmp_path), "f.json", "msg2", push=False) is False
+    assert git_publish(str(tmp_path), ["f.json"], "msg2", push=False) is False
     count = subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=tmp_path,
                            capture_output=True, text=True).stdout.strip()
     assert count == "2"
 
     # changed content -> commits again
     (tmp_path / "f.json").write_text('{"a":2}')
-    assert git_publish(str(tmp_path), "f.json", "msg3", push=False) is True
+    assert git_publish(str(tmp_path), ["f.json"], "msg3", push=False) is True
     count = subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=tmp_path,
                            capture_output=True, text=True).stdout.strip()
     assert count == "3"
@@ -188,7 +208,7 @@ def test_git_publish_commit_is_scoped_to_the_pathspec(tmp_path):
                    capture_output=True)
 
     (tmp_path / "f.json").write_text('{"a":1}')
-    assert git_publish(str(tmp_path), "f.json", "data msg", push=False) is True
+    assert git_publish(str(tmp_path), ["f.json"], "data msg", push=False) is True
 
     names = subprocess.run(
         ["git", "show", "--name-only", "--format=", "HEAD"],
@@ -235,7 +255,7 @@ def test_git_publish_pulls_before_commit(tmp_path):
 
     # a is now behind origin; git_publish must pull --rebase then commit + push
     (a / "f.json").write_text('{"a":1}')
-    assert git_publish(str(a), "f.json", "data msg", push=True) is True
+    assert git_publish(str(a), ["f.json"], "data msg", push=True) is True
 
     log = subprocess.run(["git", "-C", str(a), "log", "--oneline"],
                          capture_output=True, text=True).stdout
@@ -250,14 +270,14 @@ def test_git_publish_pulls_before_commit(tmp_path):
 def test_git_publish_bogus_repo_returns_false(tmp_path, caplog):
     missing = tmp_path / "nope"
     with caplog.at_level("ERROR"):
-        assert git_publish(str(missing), "f.json", "msg", push=False) is False
+        assert git_publish(str(missing), ["f.json"], "msg", push=False) is False
     assert any("git_publish failed" in r.message for r in caplog.records)
 
 
 def test_git_publish_push_no_remote_returns_false_but_commit_stands(tmp_path):
     _init_repo(tmp_path)
     (tmp_path / "f.json").write_text('{"a":1}')
-    assert git_publish(str(tmp_path), "f.json", "committed-msg", push=True) is False
+    assert git_publish(str(tmp_path), ["f.json"], "committed-msg", push=True) is False
     log = subprocess.run(["git", "log", "--oneline"], cwd=tmp_path,
                          capture_output=True, text=True).stdout
     assert "committed-msg" in log

@@ -27,6 +27,12 @@ publish:
   repo_dir: "D:/Github/caleta-web"
   file_rel: "dashboards/rentals/listings.json"
   git_push: true
+  # optional: per-listing event history for the dashboard timeline
+  events_path: "D:/Github/caleta-web/dashboards/rentals/events.json"
+  events_rel: "dashboards/rentals/events.json"
+
+export_gone_within_days: 30   # keep off-market listings in listings.json this long
+events_history_days: 90       # events.json window
 
 email:
   max_price: 800          # digest only; the dashboard ignores this
