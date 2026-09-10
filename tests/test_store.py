@@ -35,7 +35,7 @@ NEW_COLS = {
     "source", "currency", "price_native", "price_weekly", "first_published",
     "last_updated", "sharing_with", "rooms_available", "preferences",
     "owner_occupied", "available_from", "bathroom_type", "description",
-    "room_type", "city", "detail_json", "detail_fetched",
+    "room_type", "city", "detail_json", "detail_fetched", "previous_price",
 }
 
 V1_SCHEMA = """
@@ -67,11 +67,11 @@ def store(tmp_path):
 
 
 def test_schema_stamps_user_version(store):
-    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_fresh_db_is_v2_with_new_columns(store):
-    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 3
     assert NEW_COLS <= _cols(store)
 
 
@@ -89,7 +89,7 @@ def test_v1_db_migrates_preserving_rows(tmp_path):
 
     s = Store(p)
     try:
-        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 3
         assert NEW_COLS <= _cols(s)
         row = s._db.execute("SELECT * FROM listings WHERE id='old1'").fetchone()
         assert row["price_eur"] == 950
@@ -110,7 +110,7 @@ def test_migration_idempotent_on_reopen(tmp_path):
     Store(p).close()
     s = Store(p)
     try:
-        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 3
         assert NEW_COLS <= _cols(s)
     finally:
         s.close()
@@ -220,6 +220,26 @@ def test_sync_update_preserves_enrichment(store):
     assert got.distances_km == {"centre": 2.0}
     assert got.city == "dublin"
     assert got.price_eur == 690
+
+
+def test_sync_records_previous_price_on_change(store):
+    store.begin_cycle()
+    store.sync("s", [mk_share("x", 700)])
+    assert store.get_listing("x").previous_price is None
+
+    store.begin_cycle()
+    store.sync("s", [mk_share("x", 650)])          # dropped
+    got = store.get_listing("x")
+    assert got.price_eur == 650
+    assert got.previous_price == 700
+
+    store.begin_cycle()
+    store.sync("s", [mk_share("x", 650)])          # unchanged -> holds
+    assert store.get_listing("x").previous_price == 700
+
+    store.begin_cycle()
+    store.sync("s", [mk_share("x", 680)])          # up
+    assert store.get_listing("x").previous_price == 650
 
 
 def test_raw_json_persisted_on_insert_and_update(store):

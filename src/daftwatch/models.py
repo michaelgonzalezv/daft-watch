@@ -39,6 +39,7 @@ class Listing:
     description: str | None = None
     room_type: str | None = None
     city: str | None = None
+    previous_price: int | None = None
     distances_km: dict[str, float] = field(default_factory=dict)
     detail_fetched: bool = False
 

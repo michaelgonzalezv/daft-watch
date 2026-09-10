@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS listings (
     room_type TEXT,
     city TEXT,
     detail_json TEXT,
-    detail_fetched INTEGER NOT NULL DEFAULT 0
+    detail_fetched INTEGER NOT NULL DEFAULT 0,
+    previous_price INTEGER
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,12 +57,17 @@ CREATE TABLE IF NOT EXISTS notified (
     event_id INTEGER PRIMARY KEY,
     sent_at TEXT
 );
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 """
 
-# New v2 columns, added to an existing v1 DB by ``_migrate``. Keep in sync with
-# the ``CREATE TABLE listings`` block above.
-_V2_COLUMNS = [
+_SCHEMA_VERSION = 3
+
+# Columns added to an existing older DB by ``_migrate``. Keep in sync with the
+# ``CREATE TABLE listings`` block above. Any column missing from an existing
+# table is added regardless of the recorded version, so a single flat list
+# covers every upgrade step (v1->v2 added the first batch, v2->v3 adds
+# ``previous_price``).
+_ADDED_COLUMNS = [
     ("source", "TEXT DEFAULT 'daft'"),
     ("currency", "TEXT DEFAULT 'EUR'"),
     ("price_native", "INTEGER DEFAULT 0"),
@@ -79,6 +85,7 @@ _V2_COLUMNS = [
     ("city", "TEXT"),
     ("detail_json", "TEXT"),
     ("detail_fetched", "INTEGER NOT NULL DEFAULT 0"),
+    ("previous_price", "INTEGER"),
 ]
 
 
@@ -103,10 +110,10 @@ def _bit(value: bool | None) -> int | None:
 
 
 def _migrate(db: sqlite3.Connection) -> None:
-    """Bring an existing DB up to schema v2.
+    """Bring an existing DB up to the current schema version.
 
     Runs before ``executescript(SCHEMA)`` so the version check is meaningful:
-    a fresh DB has no ``listings`` table yet and is left to ``SCHEMA``; a v0/v1
+    a fresh DB has no ``listings`` table yet and is left to ``SCHEMA``; an older
     or partially-migrated DB gets each missing column added and the version
     stamped.
     """
@@ -116,13 +123,13 @@ def _migrate(db: sqlite3.Connection) -> None:
     if not has_table:
         return
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    if version >= 2:
+    if version >= _SCHEMA_VERSION:
         return
     existing = {r[1] for r in db.execute("PRAGMA table_info(listings)")}
-    for name, decl in _V2_COLUMNS:
+    for name, decl in _ADDED_COLUMNS:
         if name not in existing:
             db.execute(f"ALTER TABLE listings ADD COLUMN {name} {decl}")
-    db.execute("PRAGMA user_version = 2")
+    db.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
     db.commit()
 
 
@@ -158,6 +165,7 @@ def _row_to_listing(row: sqlite3.Row) -> Listing:
         description=row["description"],
         room_type=row["room_type"],
         city=row["city"],
+        previous_price=row["previous_price"],
         distances_km=distances,
         detail_fetched=bool(row["detail_fetched"]),
     )
@@ -198,7 +206,8 @@ class Store:
         for l in listings:
             self._seen.add(l.id)
             row = self._db.execute(
-                "SELECT price_eur, active FROM listings WHERE id = ?", (l.id,)
+                "SELECT price_eur, active, previous_price FROM listings WHERE id = ?",
+                (l.id,),
             ).fetchone()
             detail_json = json.dumps({"distances_km": l.distances_km})
             if row is None:
@@ -226,6 +235,11 @@ class Store:
 
             old_price = row["price_eur"]
             was_active = row["active"]
+            # previous_price records the last price this listing had before its
+            # most recent change, so the dashboard can show "was €X ↑/↓". It is
+            # left untouched while the price holds steady.
+            price_moved = bool(l.price_eur and old_price and l.price_eur != old_price)
+            previous_price = old_price if price_moved else row["previous_price"]
             # Only search-page-derived fields are refreshed here; detail columns
             # (sharing_with, ...), detail_json, detail_fetched and city are owned
             # by apply_detail / set_distances / set_city and must survive a
@@ -235,15 +249,15 @@ class Store:
                 "property_type=?, area=?, county=?, lat=?, lng=?, raw_json=?, "
                 "last_seen=?, active=1, missing_cycles=0, "
                 "source=?, currency=?, price_native=?, price_weekly=?, "
-                "first_published=?, room_type=? WHERE id=?",
+                "first_published=?, room_type=?, previous_price=? WHERE id=?",
                 (l.title, l.url, l.price_eur, l.beds, l.baths, l.property_type,
                  l.area, l.county, l.lat, l.lng, json.dumps(l.raw, default=str),
                  now, l.source, l.currency, l.price_native, l.price_weekly,
-                 l.first_published, l.room_type, l.id),
+                 l.first_published, l.room_type, previous_price, l.id),
             )
             if not was_active:
                 events.append(self._record_event(l.id, "BACK", old_price, l.price_eur))
-            elif l.price_eur and old_price and l.price_eur != old_price:
+            elif price_moved:
                 kind = "PRICE_DROP" if l.price_eur < old_price else "PRICE_UP"
                 events.append(self._record_event(l.id, kind, old_price, l.price_eur))
         self._db.commit()
