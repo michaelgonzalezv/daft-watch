@@ -1,4 +1,16 @@
-# Deploying the rentals pipeline on Windows
+# Deploying the rentals pipeline
+
+**Live deployment: GitHub Actions** — `.github/workflows/scrape.yml` runs a
+cycle every 30 minutes (repo must be public for free unlimited minutes; the
+DB persists on the `db-state` branch; it publishes to `caleta-web` with the
+`CALETA_TOKEN` secret). Config: `config.ci.yaml`. Secrets: `SMTP_*`,
+`ALERT_*`, `FAVS_API`, `FAVS_KEY`, `CALETA_TOKEN`.
+
+The Windows Task Scheduler setup below is kept as a **disabled fallback** on
+the laptop. To fall back: `Enable-ScheduledTask -TaskName "DaftWatch Rentals"`
+and disable the Actions workflow.
+
+---
 
 This runs `python -m daftwatch run` every 30 minutes with Windows Task
 Scheduler. One cycle scrapes the daft.ie sharing searches, detail-fetches new

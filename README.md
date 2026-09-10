@@ -56,10 +56,10 @@ swallowed; they never kill the cycle or lose the email.
 
 ### Deploying it
 
-**Windows Task Scheduler is the recommended deploy** — see
-[`deploy/README.md`](deploy/README.md) for `deploy/run-rentals.bat`, the
-importable `deploy/DaftWatch-Rentals.xml`, the one-time warm-up run, and
-troubleshooting. Docker (below) still works but is now secondary/optional.
+**GitHub Actions is the live deploy** — `.github/workflows/scrape.yml` runs a
+cycle every 30 min (public repo, DB on the `db-state` branch, `config.ci.yaml`).
+Windows Task Scheduler is a disabled laptop fallback; Docker still works.
+See [`deploy/README.md`](deploy/README.md).
 
 ## Setup (Docker — optional)
 
