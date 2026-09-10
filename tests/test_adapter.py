@@ -96,11 +96,24 @@ def test_to_listing_bad_publish_date_is_none():
     assert l.first_published is None
 
 
+def test_norm_phone():
+    from daftwatch.adapter import _norm_phone
+    assert _norm_phone("+353831133127") == "+353831133127"
+    assert _norm_phone("083 872 0666") == "+353838720666"
+    assert _norm_phone("00353 87 555 0132") == "+353875550132"
+    assert _norm_phone("353871234567") == "+353871234567"
+    assert _norm_phone("01 456 7890") is None      # landline, not a mobile
+    assert _norm_phone(None) is None
+    assert _norm_phone("call me") is None
+    assert _norm_phone("12345") is None
+
+
 def test_parse_detail_from_fixture():
     fields = parse_detail(_detail_listing())
     assert set(fields) == {
         "sharing_with", "rooms_available", "preferences", "owner_occupied",
         "available_from", "bathroom_type", "description", "last_updated",
+        "agent_phone", "agent_name",
     }
     assert fields["sharing_with"] == 4
     assert fields["rooms_available"] == 1
@@ -117,6 +130,7 @@ def test_parse_detail_empty_overview_all_none():
     assert set(fields) == {
         "sharing_with", "rooms_available", "preferences", "owner_occupied",
         "available_from", "bathroom_type", "description", "last_updated",
+        "agent_phone", "agent_name",
     }
     assert all(v is None for v in fields.values())
 
@@ -452,6 +466,7 @@ def test_default_client_detail_live():
         assert set(fields) == {
             "sharing_with", "rooms_available", "preferences", "owner_occupied",
             "available_from", "bathroom_type", "description", "last_updated",
+            "agent_phone", "agent_name",
         }
     finally:
         client.close()

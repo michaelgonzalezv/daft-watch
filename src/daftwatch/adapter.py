@@ -144,14 +144,34 @@ def _yn(text: Any) -> bool | None:
     return None
 
 
+def _norm_phone(raw) -> str | None:
+    """Irish mobile -> E.164 (+3538XXXXXXXX), for wa.me / sms: links. Only
+    mobiles (08x) — a landline can't take WhatsApp/SMS. None otherwise."""
+    if not isinstance(raw, str):
+        return None
+    d = re.sub(r"[^\d]", "", raw)
+    for prefix in ("00353", "353"):
+        if d.startswith(prefix):
+            d = d[len(prefix):]
+            break
+    else:
+        if d.startswith("0"):
+            d = d[1:]
+    if len(d) == 9 and d[0] == "8":
+        return "+353" + d
+    return None
+
+
 def parse_detail(listing_dict: dict) -> dict:
     """Pure map of a detail-page ``listing`` dict (with ``_overview``) to the
-    8 enrichment fields ``store.apply_detail`` expects."""
+    enrichment fields ``store.apply_detail`` expects."""
     ov = listing_dict.get("_overview", {})
     description = (listing_dict.get("description") or "").strip()[:1000] or None
     last_updated = _iso_from_ms(listing_dict.get("lastUpdateDate")) or _iso_from_ms(
         listing_dict.get("firstPublishDate")
     )
+    seller = listing_dict.get("seller") or {}
+    name = (seller.get("name") or "").strip()
     return {
         "sharing_with": parse_int(ov.get("sharing with")),
         "rooms_available": parse_int(ov.get("bedrooms available")),
@@ -161,6 +181,8 @@ def parse_detail(listing_dict: dict) -> dict:
         "bathroom_type": listing_dict.get("bathroomType"),
         "description": description,
         "last_updated": last_updated,
+        "agent_phone": _norm_phone(seller.get("phone")),
+        "agent_name": name or None,
     }
 
 

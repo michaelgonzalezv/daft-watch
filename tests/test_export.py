@@ -18,7 +18,8 @@ RECORD_KEYS = [
     "id", "source", "currency", "country", "url", "title", "price_eur", "price_native",
     "price_weekly", "previous_price", "beds", "room_type", "sharing_with", "rooms_available",
     "preferences", "owner_occupied", "available_from", "bathroom_type",
-    "property_type", "city", "area", "lat", "lng", "distance_centre_km",
+    "property_type", "agent_phone", "agent_name", "city", "area", "lat", "lng",
+    "distance_centre_km",
     "first_published", "first_seen", "last_seen", "last_updated", "status",
     "off_market_since", "days_on_market", "description",
 ]
@@ -41,7 +42,7 @@ def mk(id="1", price_eur=700, first_published="2026-09-01", **kw):
 def test_to_record_exact_keys():
     rec = to_record(mk(distances_km={"centre": 1.5}))
     assert list(rec.keys()) == RECORD_KEYS
-    assert len(rec) == 32
+    assert len(rec) == 34
     assert rec["country"] == "Ireland"
     assert rec["previous_price"] is None
     assert rec["status"] == "available"

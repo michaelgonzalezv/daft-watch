@@ -67,11 +67,11 @@ def store(tmp_path):
 
 
 def test_schema_stamps_user_version(store):
-    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
 def test_fresh_db_is_v2_with_new_columns(store):
-    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 5
     assert NEW_COLS <= _cols(store)
 
 
@@ -89,7 +89,7 @@ def test_v1_db_migrates_preserving_rows(tmp_path):
 
     s = Store(p)
     try:
-        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 5
         assert NEW_COLS <= _cols(s)
         row = s._db.execute("SELECT * FROM listings WHERE id='old1'").fetchone()
         assert row["price_eur"] == 950
@@ -110,7 +110,7 @@ def test_migration_idempotent_on_reopen(tmp_path):
     Store(p).close()
     s = Store(p)
     try:
-        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 5
         assert NEW_COLS <= _cols(s)
     finally:
         s.close()

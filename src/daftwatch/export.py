@@ -35,7 +35,7 @@ def _days_on_market(l: Listing) -> int | None:
 def to_record(l: Listing) -> dict:
     """Project a :class:`Listing` onto the frozen dashboard record.
 
-    Exactly 32 keys. ``distance_centre_km`` comes from
+    Exactly 34 keys. ``distance_centre_km`` comes from
     ``l.distances_km.get("centre")`` (float or ``None``); ``days_on_market`` is
     derived; every other key is the same-named ``Listing`` attribute.
     ``owner_occupied`` stays bool/None and ``description`` stays str/None.
@@ -60,6 +60,8 @@ def to_record(l: Listing) -> dict:
         "available_from": l.available_from,
         "bathroom_type": l.bathroom_type,
         "property_type": l.property_type,
+        "agent_phone": l.agent_phone,
+        "agent_name": l.agent_name,
         "city": l.city,
         "area": l.area,
         "lat": l.lat,

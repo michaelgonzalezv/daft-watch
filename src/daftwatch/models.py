@@ -40,6 +40,8 @@ class Listing:
     room_type: str | None = None
     city: str | None = None
     previous_price: int | None = None
+    agent_phone: str | None = None           # seller.phone, normalised to E.164
+    agent_name: str | None = None            # seller.name
     first_seen: str | None = None            # when the scraper first saw it
     last_seen: str | None = None             # last cycle it was still up
     status: str = "available"                # "available" | "off_market"

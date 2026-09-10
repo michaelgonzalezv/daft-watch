@@ -44,7 +44,9 @@ CREATE TABLE IF NOT EXISTS listings (
     city TEXT,
     detail_json TEXT,
     detail_fetched INTEGER NOT NULL DEFAULT 0,
-    previous_price INTEGER
+    previous_price INTEGER,
+    agent_phone TEXT,
+    agent_name TEXT
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,10 +70,10 @@ CREATE TABLE IF NOT EXISTS price_history (
     p75 INTEGER,
     PRIMARY KEY (date, city, category)
 );
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 """
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 # Columns added to an existing older DB by ``_migrate``. Keep in sync with the
 # ``CREATE TABLE listings`` block above. Any column missing from an existing
@@ -97,6 +99,8 @@ _ADDED_COLUMNS = [
     ("detail_json", "TEXT"),
     ("detail_fetched", "INTEGER NOT NULL DEFAULT 0"),
     ("previous_price", "INTEGER"),
+    ("agent_phone", "TEXT"),
+    ("agent_name", "TEXT"),
 ]
 
 
@@ -177,6 +181,8 @@ def _row_to_listing(row: sqlite3.Row) -> Listing:
         room_type=row["room_type"],
         city=row["city"],
         previous_price=row["previous_price"],
+        agent_phone=row["agent_phone"],
+        agent_name=row["agent_name"],
         first_seen=row["first_seen"],
         last_seen=row["last_seen"],
         distances_km=distances,
@@ -361,7 +367,7 @@ class Store:
         self._db.execute(
             "UPDATE listings SET sharing_with=?, rooms_available=?, preferences=?, "
             "owner_occupied=?, available_from=?, bathroom_type=?, description=?, "
-            "last_updated=?, detail_fetched=1 WHERE id=?",
+            "last_updated=?, agent_phone=?, agent_name=?, detail_fetched=1 WHERE id=?",
             (
                 fields.get("sharing_with"),
                 fields.get("rooms_available"),
@@ -371,6 +377,8 @@ class Store:
                 fields.get("bathroom_type"),
                 fields.get("description"),
                 fields.get("last_updated"),
+                fields.get("agent_phone"),
+                fields.get("agent_name"),
                 listing_id,
             ),
         )
