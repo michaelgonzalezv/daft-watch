@@ -56,8 +56,10 @@ jobs:
         run: |
           git config user.name  "daft-watch bot"
           git config user.email "actions@users.noreply.github.com"
-          git -C caleta-web config user.name  "daft-watch bot"
-          git -C caleta-web config user.email "actions@users.noreply.github.com"
+          # caleta-web commits must be authored by a Vercel team member or the
+          # deploy is refused — use the owner's GitHub no-reply address.
+          git -C caleta-web config user.name  "michaelgonzalezv"
+          git -C caleta-web config user.email "77208065+michaelgonzalezv@users.noreply.github.com"
 
       - name: run one cycle
         env:
