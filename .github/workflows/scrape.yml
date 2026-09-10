@@ -1,0 +1,87 @@
+name: scrape
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"    # GitHub cron is best-effort; a run may slip or skip
+  workflow_dispatch:
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+permissions:
+  contents: write             # to push the db-state branch back
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+
+      - name: checkout caleta-web
+        uses: actions/checkout@v4
+        with:
+          repository: michaelgonzalezv/caleta-web
+          token: ${{ secrets.CALETA_TOKEN }}
+          path: caleta-web
+          fetch-depth: 1
+
+      - name: restore DB from db-state branch
+        run: |
+          mkdir -p data
+          if git fetch --no-tags origin db-state 2>/dev/null && git cat-file -e FETCH_HEAD:daft.db 2>/dev/null; then
+            git show FETCH_HEAD:daft.db > data/daft.db
+            echo "DB restored ($(du -h data/daft.db | cut -f1))"
+          else
+            echo "no db-state yet — starting from an empty DB"
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-1.62.0
+
+      - run: pip install -e .
+      - run: python -m playwright install --with-deps chromium
+
+      - name: git identity for caleta-web
+        run: |
+          git -C caleta-web config user.name  "daft-watch bot"
+          git -C caleta-web config user.email "actions@users.noreply.github.com"
+
+      - name: run one cycle
+        env:
+          DAFT_WATCH_STATE: ${{ runner.temp }}/pw-state.json
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          ALERT_FROM: ${{ secrets.ALERT_FROM }}
+          ALERT_TO: ${{ secrets.ALERT_TO }}
+          FAVS_API: ${{ secrets.FAVS_API }}
+          FAVS_KEY: ${{ secrets.FAVS_KEY }}
+        run: python -m daftwatch run --config config.ci.yaml --db data/daft.db
+
+      - name: save DB back to db-state branch
+        if: always()
+        run: |
+          test -f data/daft.db || exit 0
+          blob=$(git hash-object -w data/daft.db)
+          tree=$(printf '100644 blob %s\tdaft.db\n' "$blob" | git mktree)
+          parent=$(git rev-parse -q --verify FETCH_HEAD || true)
+          msg="db state $(date -u +%FT%TZ)"
+          if [ -n "$parent" ]; then
+            commit=$(echo "$msg" | git commit-tree "$tree" -p "$parent")
+          else
+            commit=$(echo "$msg" | git commit-tree "$tree")
+          fi
+          git push -f origin "$commit:refs/heads/db-state"
+          echo "db-state updated"

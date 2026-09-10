@@ -1,0 +1,45 @@
+# Config for the GitHub Actions run (see .github/workflows/scrape.yml).
+# Paths are relative to the workspace: caleta-web is checked out into ./caleta-web
+# and the DB is restored to ./data/daft.db from the db-state branch.
+interval_minutes: 30
+gone_after_cycles: 2
+rate_limit_seconds: 3
+detail_price_cap: 100000000
+detail_max_per_cycle: 120
+
+searches:
+  - name: "Cork sharing"
+    category: sharing
+    params: { location: [cork-city] }
+  - name: "Limerick sharing"
+    category: sharing
+    params: { location: [limerick-city] }
+  - name: "Dublin sharing"
+    category: sharing
+    params: { location: [dublin-city] }
+
+filters:
+  max_sharing_with: 4
+  keywords_exclude: []
+
+publish:
+  json_path: "caleta-web/dashboards/rentals/listings.json"
+  repo_dir: "caleta-web"
+  file_rel: "dashboards/rentals/listings.json"
+  git_push: true
+  events_path: "caleta-web/dashboards/rentals/events.json"
+  events_rel: "dashboards/rentals/events.json"
+  history_path: "caleta-web/dashboards/rentals/history.json"
+  history_rel: "dashboards/rentals/history.json"
+
+email:
+  max_price: 800
+  distance_km: { dublin: 6, cork: 4, limerick: 4 }
+
+notify:
+  min_event_types: [NEW, PRICE_DROP]
+
+export_gone_within_days: 30
+events_history_days: 90
+price_history_days: 400
+# no `backup:` block here — on CI the DB is persisted via the db-state branch
