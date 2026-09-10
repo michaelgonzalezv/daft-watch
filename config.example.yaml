@@ -30,6 +30,9 @@ publish:
   # optional: per-listing event history for the dashboard timeline
   events_path: "D:/Github/caleta-web/dashboards/rentals/events.json"
   events_rel: "dashboards/rentals/events.json"
+  # optional: daily price-distribution snapshots for the Market view
+  history_path: "D:/Github/caleta-web/dashboards/rentals/history.json"
+  history_rel: "dashboards/rentals/history.json"
 
 export_gone_within_days: 30   # keep off-market listings in listings.json this long
 events_history_days: 90       # events.json window

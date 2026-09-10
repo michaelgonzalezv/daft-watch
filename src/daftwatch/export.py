@@ -142,6 +142,41 @@ def write_json(path: str, listings: list[Listing], generated_at: str) -> bool:
     return True
 
 
+def write_history_json(path: str, rows: list[dict], generated_at: str) -> bool:
+    """Write ``history.json`` (``{"generated_at", "history": [row, ...]}``) —
+    daily price-distribution snapshots. Same atomic + skip-when-unchanged
+    contract as :func:`write_json`.
+    """
+    payload = {"generated_at": generated_at, "history": rows}
+
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                existing = json.load(fh)
+            new_rows = json.loads(json.dumps(rows, default=str))
+            if existing.get("history") == new_rows:
+                return False
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=1, ensure_ascii=False, default=str)
+            fh.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    return True
+
+
 def write_events_json(path: str, history: dict, generated_at: str) -> bool:
     """Write ``events.json`` (``{"generated_at", "events": {id: [...]}}``).
 

@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from daftwatch.export import to_record, write_json, write_events_json, git_publish
+from daftwatch.export import (
+    git_publish,
+    to_record,
+    write_events_json,
+    write_history_json,
+    write_json,
+)
 from daftwatch.models import Listing
 
 
@@ -162,6 +168,20 @@ def test_write_events_json_skip_when_unchanged(tmp_path):
     h2 = {"a": h["a"] + [{"type": "GONE", "old_price": 700, "new_price": None,
                           "at": "2026-09-05T00:00:00+00:00"}]}
     assert write_events_json(str(p), h2, "2026-09-05T10:00:00") is True
+
+
+# -- write_history_json --------------------------------------------------
+
+def test_write_history_json_skip_when_unchanged(tmp_path):
+    p = tmp_path / "history.json"
+    rows = [{"date": "2026-09-10", "city": "cork", "category": "sharing",
+             "count": 5, "p25": 500, "median": 600, "p75": 800}]
+    assert write_history_json(str(p), rows, "2026-09-10T10:00:00") is True
+    assert json.loads(p.read_text(encoding="utf-8"))["history"] == rows
+    assert write_history_json(str(p), rows, "2026-09-11T10:00:00") is False
+    rows2 = rows + [{"date": "2026-09-11", "city": "cork", "category": "sharing",
+                     "count": 6, "p25": 510, "median": 610, "p75": 810}]
+    assert write_history_json(str(p), rows2, "2026-09-11T10:00:00") is True
 
 
 # -- git_publish -----------------------------------------------------------

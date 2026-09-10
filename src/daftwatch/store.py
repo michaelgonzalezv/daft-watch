@@ -58,10 +58,20 @@ CREATE TABLE IF NOT EXISTS notified (
     event_id INTEGER PRIMARY KEY,
     sent_at TEXT
 );
-PRAGMA user_version = 3;
+CREATE TABLE IF NOT EXISTS price_history (
+    date TEXT,
+    city TEXT,
+    category TEXT,
+    count INTEGER,
+    p25 INTEGER,
+    median INTEGER,
+    p75 INTEGER,
+    PRIMARY KEY (date, city, category)
+);
+PRAGMA user_version = 4;
 """
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 # Columns added to an existing older DB by ``_migrate``. Keep in sync with the
 # ``CREATE TABLE listings`` block above. Any column missing from an existing
@@ -451,6 +461,43 @@ class Store:
             Event(r["id"], r["listing_id"], r["type"], r["old_price"], r["new_price"])
             for r in rows
         ]
+
+    def snapshot_prices(self, date_str: str) -> None:
+        """Record today's price distribution per (city, category) from the
+        active set. Idempotent for a given date — a re-run overwrites it.
+        """
+        rows = self._db.execute(
+            "SELECT city, category, price_eur FROM listings "
+            "WHERE active = 1 AND price_eur > 0 AND city IS NOT NULL"
+        ).fetchall()
+        buckets: dict[tuple[str, str], list[int]] = {}
+        for r in rows:
+            buckets.setdefault((r["city"], r["category"]), []).append(r["price_eur"])
+        for (city, category), prices in buckets.items():
+            prices.sort()
+            n = len(prices)
+
+            def _pct(q: float) -> int:
+                return prices[min(n - 1, int(n * q))]
+
+            self._db.execute(
+                "INSERT OR REPLACE INTO price_history "
+                "(date, city, category, count, p25, median, p75) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (date_str, city, category, n, _pct(0.25), _pct(0.5), _pct(0.75)),
+            )
+        self._db.commit()
+
+    def price_history_rows(self, days: int) -> list[dict]:
+        cutoff = (
+            datetime.now(timezone.utc).date() - timedelta(days=days)
+        ).isoformat()
+        rows = self._db.execute(
+            "SELECT date, city, category, count, p25, median, p75 "
+            "FROM price_history WHERE date >= ? ORDER BY date ASC, city ASC",
+            (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def dump_sql(self, path: str) -> None:
         """Write a plain-SQL dump of the whole DB (``sqlite3 db < dump`` to

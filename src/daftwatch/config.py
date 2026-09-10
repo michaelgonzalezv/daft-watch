@@ -32,6 +32,8 @@ class PublishConfig:
     git_push: bool = True
     events_path: str | None = None      # where events.json is written
     events_rel: str | None = None       # its path inside repo_dir
+    history_path: str | None = None     # where history.json is written
+    history_rel: str | None = None      # its path inside repo_dir
 
 
 @dataclass
@@ -57,6 +59,7 @@ class Config:
     email_max_price: int | None = None
     export_gone_within_days: int = 30   # keep off-market listings this long
     events_history_days: int = 90       # events.json window
+    price_history_days: int = 400       # history.json window
     watchlist_api: str | None = None    # dashboard /api/favs URL (from env FAVS_API)
     watchlist_key: str | None = None    # its x-fav-key (from env FAVS_KEY)
     backup: "BackupConfig | None" = None
@@ -123,6 +126,8 @@ def load_config(path: str | os.PathLike) -> Config:
             git_push=publish_raw.get("git_push", True),
             events_path=publish_raw.get("events_path"),
             events_rel=publish_raw.get("events_rel"),
+            history_path=publish_raw.get("history_path"),
+            history_rel=publish_raw.get("history_rel"),
         )
 
     backup = None
@@ -159,5 +164,6 @@ def load_config(path: str | os.PathLike) -> Config:
         email_max_price=email_max_price,
         export_gone_within_days=data.get("export_gone_within_days", 30),
         events_history_days=data.get("events_history_days", 90),
+        price_history_days=data.get("price_history_days", 400),
         backup=backup,
     )

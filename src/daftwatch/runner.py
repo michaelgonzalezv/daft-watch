@@ -150,6 +150,15 @@ def run_cycle(
                     wrote = True
                 rels.append(config.publish.events_rel)
 
+            if config.publish.history_path and config.publish.history_rel:
+                store.snapshot_prices(now.date().isoformat())
+                rows = store.price_history_rows(config.price_history_days)
+                if export.write_history_json(
+                    config.publish.history_path, rows, now.isoformat()
+                ):
+                    wrote = True
+                rels.append(config.publish.history_rel)
+
             if not wrote:
                 # nothing changed on disk -> no commit needed, not a failure
                 result.publish_ok = True

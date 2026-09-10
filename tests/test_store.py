@@ -67,11 +67,11 @@ def store(tmp_path):
 
 
 def test_schema_stamps_user_version(store):
-    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
 def test_fresh_db_is_v2_with_new_columns(store):
-    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 4
     assert NEW_COLS <= _cols(store)
 
 
@@ -89,7 +89,7 @@ def test_v1_db_migrates_preserving_rows(tmp_path):
 
     s = Store(p)
     try:
-        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 4
         assert NEW_COLS <= _cols(s)
         row = s._db.execute("SELECT * FROM listings WHERE id='old1'").fetchone()
         assert row["price_eur"] == 950
@@ -110,7 +110,7 @@ def test_migration_idempotent_on_reopen(tmp_path):
     Store(p).close()
     s = Store(p)
     try:
-        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 4
         assert NEW_COLS <= _cols(s)
     finally:
         s.close()
@@ -257,6 +257,24 @@ def test_export_listings_includes_recently_gone(store):
 
     # a cutoff in the future -> the off-market one drops out
     assert {l.id for l in store.export_listings(gone_within_days=-1)} == {"keep"}
+
+
+def test_snapshot_prices_percentiles_and_idempotent(store):
+    store.begin_cycle()
+    ls = [mk_share(str(i), p) for i, p in enumerate([400, 500, 600, 700, 800])]
+    store.sync("s", ls)
+    for l in ls:
+        store.set_city(l.id, "cork")
+    store.snapshot_prices("2026-09-10")
+    rows = store.price_history_rows(days=400)
+    assert len(rows) == 1
+    r = rows[0]
+    assert (r["date"], r["city"], r["category"], r["count"]) == ("2026-09-10", "cork", "sharing", 5)
+    assert r["median"] == 600 and r["p25"] == 500 and r["p75"] == 700
+
+    # re-run same day overwrites, does not duplicate
+    store.snapshot_prices("2026-09-10")
+    assert len(store.price_history_rows(days=400)) == 1
 
 
 def test_dump_sql_roundtrips(store, tmp_path):
