@@ -8,7 +8,59 @@ Personal use only. It runs at one request every ~2 seconds with an honest
 user agent. Do not use it for bulk data collection or resale — daft.ie's
 terms forbid that.
 
-## Setup
+## Rentals sharing pipeline
+
+The main use case this repo is deployed for. Every 30 minutes it:
+
+- **Watches** daft.ie house-shares in Cork, Limerick and Dublin priced at or
+  below €800 (`config.yaml` → `searches`, three `category: sharing` entries).
+- **Enriches** each new candidate by loading its detail page once and pulling
+  "Sharing with", rooms available, preferences, owner-occupied, available-from,
+  bathroom type and description. Detail pages are fetched once and never again.
+- Computes each listing's straight-line distance to its city centre.
+
+It then produces **two outputs**:
+
+1. **A curated HTML email** — new and price-dropped listings that also pass a
+   per-city distance-to-centre filter (`email.distance_km`), sorted price
+   ascending. Rendered as an inline-styled table.
+2. **`listings.json`** — every active listing, written to a `caleta-web`
+   checkout and `git push`ed. It powers the interactive browse/filter page at
+   **`caleta.tech/tools/rentals`**.
+
+### `config.yaml` shape
+
+Copy `config.example.yaml` to `data/config.yaml` and edit it. Beyond the base
+`searches` / `filters` / `notify` keys it adds:
+
+```yaml
+detail_price_cap: 800        # only detail-fetch listings at/under this
+detail_max_per_cycle: 60     # cap detail fetches per cycle (spreads the warm-up)
+
+publish:                     # omit the whole block to disable JSON export + git
+  json_path: "D:/Github/caleta-web/tools/rentals/listings.json"
+  repo_dir:  "D:/Github/caleta-web"
+  file_rel:  "tools/rentals/listings.json"
+  git_push:  true
+
+email:
+  distance_km: { dublin: 6, cork: 4, limerick: 4 }   # email filter only
+```
+
+The **`publish:` block must point at a real local `caleta-web` checkout** whose
+git can commit and push without a password prompt (SSH key or credential
+helper). If `publish:` is absent, the cycle still scrapes and emails — it just
+skips the JSON export and git push. `git_publish` failures are logged and
+swallowed; they never kill the cycle or lose the email.
+
+### Deploying it
+
+**Windows Task Scheduler is the recommended deploy** — see
+[`deploy/README.md`](deploy/README.md) for `deploy/run-rentals.bat`, the
+importable `deploy/DaftWatch-Rentals.xml`, the one-time warm-up run, and
+troubleshooting. Docker (below) still works but is now secondary/optional.
+
+## Setup (Docker — optional)
 
 1. `cp .env.example .env` and fill in your SMTP details. For Gmail, enable
    2-factor auth and create an **App Password** (Google Account → Security →
