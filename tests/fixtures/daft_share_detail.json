@@ -1,0 +1,62 @@
+{
+ "props": {
+  "pageProps": {
+   "listing": {
+    "id": 6661815,
+    "title": "11 Park View, Victoria Road, Cork, Blackrock, Co. Cork",
+    "sections": [
+     "Property",
+     "Sharing",
+     "House"
+    ],
+    "category": "Share",
+    "price": "\u20ac160 per week",
+    "numBedrooms": "Single Room",
+    "bathroomType": "Shared Bathroom",
+    "propertyType": "House",
+    "point": {
+     "type": "Point",
+     "coordinates": [
+      -8.458535,
+      51.897272
+     ]
+    },
+    "seoFriendlyPath": "/share/11-park-view-victoria-road-cork-blackrock-co-cork/6661815",
+    "publishDate": 1788373250189,
+    "firstPublishDate": 1788373250189,
+    "lastUpdateDate": 1788460000000,
+    "description": "Central to city centre\n6 minutes walk\nBright warm and comfortable\nAll utility Bill's included except electricity paid separately",
+    "propertyOverview": [
+     {
+      "label": "Bedrooms Available",
+      "text": "1"
+     },
+     {
+      "label": "Available From",
+      "text": "Immediately"
+     },
+     {
+      "label": "Available For",
+      "text": "6 Months"
+     },
+     {
+      "label": "Sharing with",
+      "text": "4"
+     },
+     {
+      "label": "Owner Occupied",
+      "text": "No"
+     },
+     {
+      "label": "Preferences",
+      "text": "Female"
+     }
+    ],
+    "ber": {
+     "rating": "B1"
+    },
+    "state": "PUBLISHED"
+   }
+  }
+ }
+}

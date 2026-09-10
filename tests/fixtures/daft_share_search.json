@@ -1,0 +1,84 @@
+{
+ "props": {
+  "pageProps": {
+   "section": "sharing",
+   "listings": [
+    {
+     "listing": {
+      "id": 6634082,
+      "title": "Apartment  Popes Quay, Cork, Cork City Centre, Co. Cork",
+      "sections": [
+       "Property",
+       "Sharing",
+       "Apartment"
+      ],
+      "saleType": [
+       "To Let"
+      ],
+      "publishDate": 1788512951103,
+      "category": "Share",
+      "price": "From \u20ac725 to \u20ac750 per month",
+      "abbreviatedPrice": "\u20ac730+",
+      "numBedrooms": "Double & Twin Room",
+      "propertyType": "Apartment",
+      "daftShortcode": "36634082",
+      "point": {
+       "type": "Point",
+       "coordinates": [
+        -8.476478,
+        51.902033
+       ]
+      },
+      "seoFriendlyPath": "/share/apartment-popes-quay-cork-cork-city-centre-co-cork/6634082",
+      "ber": {
+       "rating": "A1"
+      },
+      "state": "PUBLISHED"
+     },
+     "savedAd": false
+    },
+    {
+     "listing": {
+      "id": 6661815,
+      "title": "11 Park View, Victoria Road, Cork, Blackrock, Co. Cork",
+      "sections": [
+       "Property",
+       "Sharing",
+       "House"
+      ],
+      "saleType": [
+       "To Let"
+      ],
+      "publishDate": 1788373250189,
+      "category": "Share",
+      "price": "\u20ac160 per week",
+      "abbreviatedPrice": "\u20ac160",
+      "numBedrooms": "Single Room",
+      "propertyType": "House",
+      "daftShortcode": "36661815",
+      "point": {
+       "type": "Point",
+       "coordinates": [
+        -8.458535,
+        51.897272
+       ]
+      },
+      "seoFriendlyPath": "/share/11-park-view-victoria-road-cork-blackrock-co-cork/6661815",
+      "ber": {
+       "rating": "B1"
+      },
+      "state": "PUBLISHED"
+     },
+     "savedAd": false
+    }
+   ],
+   "paging": {
+    "totalPages": 1,
+    "currentPage": 1,
+    "totalResults": 2,
+    "pageSize": 20,
+    "nextFrom": 20
+   }
+  }
+ }
+}

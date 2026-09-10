@@ -1,0 +1,42 @@
+interval_minutes: 30
+gone_after_cycles: 2
+rate_limit_seconds: 2
+
+searches:
+  - name: "Cork sharing <=800"
+    category: sharing
+    params:
+      location: [cork-city]
+      max_price: 800
+  - name: "Limerick sharing <=800"
+    category: sharing
+    params:
+      location: [limerick-city]
+      max_price: 800
+  - name: "Dublin sharing <=800"
+    category: sharing
+    params:
+      location: [dublin-city]
+      max_price: 800
+
+detail_price_cap: 800
+detail_max_per_cycle: 60
+
+publish:
+  json_path: "D:/Github/caleta-web/dashboards/rentals/listings.json"
+  repo_dir: "D:/Github/caleta-web"
+  file_rel: "dashboards/rentals/listings.json"
+  git_push: true
+
+email:
+  distance_km:
+    dublin: 6
+    cork: 4
+    limerick: 4
+
+filters:
+  max_price: 800
+  max_sharing_with: 4
+
+notify:
+  min_event_types: [NEW, PRICE_DROP]

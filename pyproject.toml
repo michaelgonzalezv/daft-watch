@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "daftwatch"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["playwright==1.62.0", "PyYAML==6.0.2"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-m 'not live'"
+markers = ["live: hits the real daft.ie site; excluded from CI"]
