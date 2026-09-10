@@ -10,7 +10,6 @@ REM Load KEY=VALUE pairs from .env (skip blank and #-comment lines).
 REM tokens=1,* keeps the whole value even if it contains spaces or '='.
 for /f "usebackq tokens=1,* delims==" %%a in (`type "D:\Github\daft-watch\.env" ^| findstr /r "^[^#].*="`) do set "%%a=%%b"
 
-REM Uses the global Python on PATH. If 'python' is not found, replace the
-REM next line with the full path, e.g.:
-REM   "C:\Users\joale\AppData\Local\Programs\Python\Python312\python.exe" -m daftwatch run --config data\config.yaml --db data\daft.db >> data\rentals.log 2>&1
-python -m daftwatch run --config data\config.yaml --db data\daft.db >> data\rentals.log 2>&1
+REM Absolute path to the interpreter daftwatch is installed into (pip install -e .).
+REM If you move your Python, update this line.
+"C:\Users\joale\AppData\Local\Programs\Python\Python312\python.exe" -m daftwatch run --config data\config.yaml --db data\daft.db >> data\rentals.log 2>&1
