@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from daftwatch.adapter import AdapterError, RateLimited, SearchAdapter
+from daftwatch.adapter import AdapterError, SearchAdapter
 from daftwatch.config import Config, NotifyConfig, PublishConfig, Search
 from daftwatch.models import Listing
 from daftwatch.store import Store
@@ -359,23 +359,6 @@ def test_detail_adapter_error_is_isolated(tmp_path):
     store.close()
 
 
-def test_detail_rate_limited_breaks_loop_export_still_runs(tmp_path):
-    store = Store(str(tmp_path / "t.db"))
-    pub, repo = _pub(tmp_path)
-    s = Search(name="Cork sharing", category="sharing", params={})
-    adapter = FakeAdapter(
-        {"Cork sharing": [mkshare("1", 700), mkshare("2", 750)]},
-        details={"/share/1": RateLimited("429")},
-    )
-    notifier = RecordingNotifier()
-    r = run_cycle(cfg([s], publish=pub), store, adapter, notifier,
-                  logging.getLogger("t"))
-    assert adapter.detail_calls == ["/share/1"]  # loop broke
-    assert (repo / "listings.json").exists()
-    assert r.events_sent == 2
-    store.close()
-
-
 def test_detail_loop_circuit_breaker(tmp_path):
     store = Store(str(tmp_path / "t.db"))
     pub, repo = _pub(tmp_path)
@@ -479,6 +462,85 @@ def test_json_export_keeps_all_house_sizes(tmp_path):
     data = json.loads((repo / "listings.json").read_text(encoding="utf-8"))
     # max_sharing_with is NOT applied to the JSON: the big house stays in
     assert {rec["id"] for rec in data["listings"]} == {"1", "2"}
+    store.close()
+
+
+def test_distance_dropped_event_is_suppressed_not_replayed(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Dublin sharing", category="sharing", params={})
+    far = mkshare("d1", 700, lat=_DUBLIN[0] + 0.072, lng=_DUBLIN[1])  # ~8 km N
+    notifier = RecordingNotifier()
+    log = logging.getLogger("t")
+
+    # cycle 1: 6 km limit -> the NEW event is dropped from the email
+    r1 = run_cycle(cfg([s], email_distance_km={"dublin": 6}), store,
+                   FakeAdapter({"Dublin sharing": [far]}), notifier, log)
+    assert r1.events_sent == 0
+    assert store.pending_events() == []  # suppressed, not left pending forever
+
+    # cycle 2: limit widened to 20 km -> the old NEW is NOT replayed
+    r2 = run_cycle(cfg([s], email_distance_km={"dublin": 20}), store,
+                   FakeAdapter({"Dublin sharing": [far]}), notifier, log)
+    assert r2.events_sent == 0
+    assert notifier.digests == []
+    store.close()
+
+
+def test_event_for_listing_not_seen_this_cycle_stays_pending(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Cork sharing", category="sharing", params={})
+    log = logging.getLogger("t")
+
+    # cycle 1: listing present but the email blows up -> NEW event stays pending
+    with pytest.raises(RuntimeError):
+        run_cycle(cfg([s]), store,
+                  FakeAdapter({"Cork sharing": [mkshare("1", 700)]}),
+                  BrokenNotifier(), log)
+    assert [e.listing_id for e in store.pending_events()] == ["1"]
+
+    # cycle 2: listing absent from every search -> NOT suppressed, still pending
+    r = run_cycle(cfg([s], min_types=("GONE",)), store,
+                  FakeAdapter({"Cork sharing": []}), RecordingNotifier(), log)
+    assert r.events_sent == 1  # the GONE event
+    assert [e.listing_id for e in store.pending_events()] == ["1"]  # NEW still pending
+    store.close()
+
+
+def test_loop_alerts_on_sustained_publish_failure(tmp_path, monkeypatch):
+    store = Store(str(tmp_path / "t.db"))
+    monkeypatch.setattr(
+        "daftwatch.runner.export.write_json",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    pub, _repo = _pub(tmp_path)
+    s = Search(name="Cork sharing", category="sharing", params={})
+    adapter = FakeAdapter({"Cork sharing": [mkshare("1", 700)]})
+    notifier = CountingNotifier()
+    loop(cfg([s], publish=pub), store, adapter, notifier, logging.getLogger("t"),
+         sleeper=lambda x: None, clock=lambda: 0.0, max_cycles=5)
+    pub_alerts = [a for a in notifier.alerts if a[0] == "rentals publish failing"]
+    assert len(pub_alerts) == 1  # fires at the 3rd consecutive failure, then throttled
+    store.close()
+
+
+def test_loop_publish_failure_counter_resets_on_success(tmp_path, monkeypatch):
+    store = Store(str(tmp_path / "t.db"))
+    calls = {"n": 0}
+
+    def flaky_write_json(*a, **k):
+        calls["n"] += 1
+        if calls["n"] in (1, 2, 4):  # fail, fail, ok, fail, ok...
+            raise OSError("disk full")
+        return False  # "wrote nothing / unchanged" -> publish_ok True
+
+    monkeypatch.setattr("daftwatch.runner.export.write_json", flaky_write_json)
+    pub, _repo = _pub(tmp_path)
+    s = Search(name="Cork sharing", category="sharing", params={})
+    adapter = FakeAdapter({"Cork sharing": [mkshare("1", 700)]})
+    notifier = CountingNotifier()
+    loop(cfg([s], publish=pub), store, adapter, notifier, logging.getLogger("t"),
+         sleeper=lambda x: None, clock=lambda: 0.0, max_cycles=5)
+    assert [a for a in notifier.alerts if a[0] == "rentals publish failing"] == []
     store.close()
 
 

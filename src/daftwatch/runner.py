@@ -10,7 +10,6 @@ from daftwatch import export, filters, geo
 from daftwatch.adapter import (
     _DAFT_BASE,
     AdapterError,
-    RateLimited,
     SearchAdapter,
     parse_detail,
 )
@@ -25,6 +24,9 @@ class CycleResult:
     events_sent: int = 0
     searches_failed: list[str] = field(default_factory=list)
     adapter_broken: bool = False
+    # None when publishing is not configured; True/False = did this cycle's
+    # export.write_json + git_publish succeed.
+    publish_ok: bool | None = None
 
 
 def run_cycle(
@@ -61,15 +63,27 @@ def run_cycle(
     if not result.adapter_broken:
         store.finish_cycle(config.gone_after_cycles)
 
-    # 1. persist resolved city + centre distance for every synced listing
+    # 1. persist resolved city + centre distance for every synced listing, in
+    #    ONE transaction. Skip a listing whose stored city and centre distance
+    #    already match; use the Listing objects from this cycle's fetch rather
+    #    than re-reading each row.
+    fetched_by_id = {l.id: l for l in fetched}
+    geo_updates: dict[str, tuple[str | None, float | None]] = {}
     for lid, city in city_by_id.items():
-        store.set_city(lid, city)
-        listing = store.get_listing(lid)
-        if listing is None:
+        src = fetched_by_id.get(lid)
+        if src is None:
             continue
-        dist = geo.distance_to_centre(listing.lat, listing.lng, city)
-        if dist is not None:
-            store.set_distances(lid, {"centre": dist})
+        dist = geo.distance_to_centre(src.lat, src.lng, city)
+        current = store.get_listing(lid)
+        if (
+            current is not None
+            and current.city == city
+            and current.distances_km.get("centre") == dist
+        ):
+            continue
+        geo_updates[lid] = (city, dist)
+    if geo_updates:
+        store.set_cities_and_distances(geo_updates)
 
     # 2. detail-fetch cheap, not-yet-enriched candidates (enriches the DB
     #    regardless of whether publishing is configured)
@@ -83,9 +97,8 @@ def run_cycle(
             continue
         try:
             detail = adapter.detail(path)
-        except RateLimited:
-            logger.warning("detail rate-limited; stopping detail loop this cycle")
-            break
+        # rate limiting surfaces as AdapterError here (see adapter._with_backoff);
+        # the 3-strike breaker below handles a sustained block.
         except AdapterError:
             logger.exception("detail fetch failed for %s", lid)
             consecutive_failures += 1
@@ -114,17 +127,22 @@ def run_cycle(
                 store.active_listings(),
                 {k: v for k, v in config.filters.items() if k != "max_sharing_with"},
             )
-            export.write_json(
+            wrote = export.write_json(
                 config.publish.json_path, export_listings, now.isoformat()
             )
-            export.git_publish(
-                config.publish.repo_dir,
-                config.publish.file_rel,
-                f"data: rentals listings {now:%Y-%m-%d %H:%M}",
-                config.publish.git_push,
-            )
+            if not wrote:
+                # nothing changed on disk -> no commit needed, not a failure
+                result.publish_ok = True
+            else:
+                result.publish_ok = export.git_publish(
+                    config.publish.repo_dir,
+                    config.publish.file_rel,
+                    f"data: rentals listings {now:%Y-%m-%d %H:%M}",
+                    config.publish.git_push,
+                )
         except Exception:
             logger.exception("export/publish failed")
+            result.publish_ok = False
 
     allowed_ids = {l.id for l in filters.apply(fetched, config.filters)}
     min_types = set(config.notify.min_event_types)
@@ -154,14 +172,30 @@ def run_cycle(
             key=lambda p: (p[1].price_eur, _date_desc_key(p[1].first_published))
         )
 
+    sent_ids: list[int] = []
     if to_send:
         try:
             notifier.send_digest(to_send)
         except Exception:
             logger.exception("send_digest failed; events stay pending")
             raise
-        store.mark_notified([e.id for e, _ in to_send])
+        sent_ids = [e.id for e, _ in to_send]
         result.events_sent = len(to_send)
+
+    # Resolve every pending event whose listing was part of this cycle's fetched
+    # set: it was either sent above or intentionally dropped (wrong type, filter,
+    # or distance). Leaving the dropped ones pending would flood a later email
+    # when a filter/distance/min_event_types setting is widened. Events whose
+    # listing was not seen this cycle stay pending — including GONE, whose
+    # listing is by definition absent from seen_this_cycle().
+    seen = store.seen_this_cycle()
+    sent_set = set(sent_ids)
+    suppressed_ids = [
+        ev.id
+        for ev in store.pending_events()
+        if ev.id not in sent_set and ev.listing_id in seen
+    ]
+    store.mark_notified(sent_ids + suppressed_ids)
 
     return result
 
@@ -182,6 +216,8 @@ def loop(
     max_cycles: int | None = None,
 ) -> None:
     last_alert: float | None = None
+    last_publish_alert: float | None = None
+    publish_failures = 0
     cycles = 0
     while max_cycles is None or cycles < max_cycles:
         cycles += 1
@@ -195,6 +231,23 @@ def loop(
                         "Failed searches: " + ", ".join(result.searches_failed),
                     )
                     last_alert = now
+            if result.publish_ok is True:
+                publish_failures = 0
+            elif result.publish_ok is False:
+                publish_failures += 1
+                if publish_failures >= 3:
+                    now = clock()
+                    if (
+                        last_publish_alert is None
+                        or now - last_publish_alert >= _ALERT_THROTTLE_SECONDS
+                    ):
+                        notifier.send_alert(
+                            "rentals publish failing",
+                            f"{publish_failures} consecutive export/publish "
+                            "failures; the dashboard listings.json is not "
+                            "updating (check the git checkout / remote).",
+                        )
+                        last_publish_alert = now
         except Exception:
             logger.exception("run_cycle raised; continuing after sleep")
         finally:

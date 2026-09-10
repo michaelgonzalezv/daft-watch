@@ -81,12 +81,6 @@ _V2_COLUMNS = [
     ("detail_fetched", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
-# The 8 keys ``apply_detail`` writes (values may be None).
-_DETAIL_KEYS = (
-    "sharing_with", "rooms_available", "preferences", "owner_occupied",
-    "available_from", "bathroom_type", "description", "last_updated",
-)
-
 
 @dataclass(frozen=True)
 class Event:
@@ -299,7 +293,9 @@ class Store:
         )
         self._db.commit()
 
-    def set_distances(self, listing_id: str, distances: dict[str, float]) -> None:
+    def _set_distances_nocommit(
+        self, listing_id: str, distances: dict[str, float]
+    ) -> None:
         row = self._db.execute(
             "SELECT detail_json FROM listings WHERE id = ?", (listing_id,)
         ).fetchone()
@@ -320,12 +316,31 @@ class Store:
             "UPDATE listings SET detail_json = ? WHERE id = ?",
             (json.dumps(data), listing_id),
         )
+
+    def set_distances(self, listing_id: str, distances: dict[str, float]) -> None:
+        self._set_distances_nocommit(listing_id, distances)
         self._db.commit()
 
-    def set_city(self, listing_id: str, city: str | None) -> None:
+    def _set_city_nocommit(self, listing_id: str, city: str | None) -> None:
         self._db.execute(
             "UPDATE listings SET city = ? WHERE id = ?", (city, listing_id)
         )
+
+    def set_city(self, listing_id: str, city: str | None) -> None:
+        self._set_city_nocommit(listing_id, city)
+        self._db.commit()
+
+    def set_cities_and_distances(
+        self, mapping: dict[str, tuple[str | None, float | None]]
+    ) -> None:
+        """Persist ``{listing_id: (city, centre_distance_km)}`` in one commit.
+
+        A ``None`` distance updates only the city (no centre distance known).
+        """
+        for listing_id, (city, dist) in mapping.items():
+            self._set_city_nocommit(listing_id, city)
+            if dist is not None:
+                self._set_distances_nocommit(listing_id, {"centre": dist})
         self._db.commit()
 
     def finish_cycle(self, gone_after_cycles: int) -> list[Event]:
