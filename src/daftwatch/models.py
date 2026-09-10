@@ -61,9 +61,14 @@ def parse_price_range(text: str) -> int:
     m = _RANGE.search(text)
     if m:
         low = int(m.group(1).replace(",", ""))
+        high = int(m.group(2).replace(",", ""))
+        # daft uses "From €1 to €210 per week" as a teaser: the low end is a
+        # placeholder, not a real asking price. When it is less than half the
+        # high end, treat the high end as the real figure.
+        amount = high if low < high * 0.5 else low
         if "week" in text.lower():
-            return round(low * 52 / 12)
-        return low
+            return round(amount * 52 / 12)
+        return amount
     return parse_price(text)
 
 

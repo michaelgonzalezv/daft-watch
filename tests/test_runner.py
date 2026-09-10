@@ -446,6 +446,42 @@ def test_detail_loop_skips_empty_url(tmp_path):
     store.close()
 
 
+def test_json_export_is_price_filtered(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    pub, repo = _pub(tmp_path)
+    s = Search(name="Cork sharing", category="sharing", params={})
+    # daft's rentalPrice_to filters on native weekly price -> a €350/wk share
+    # (~€1517/mo) comes back; the JSON must still drop it.
+    adapter = FakeAdapter({"Cork sharing": [mkshare("cheap", 700),
+                                            mkshare("pricey", 1500)]})
+    notifier = RecordingNotifier()
+    run_cycle(cfg([s], filters={"max_price": 800}, publish=pub),
+              store, adapter, notifier, logging.getLogger("t"))
+
+    assert {l.id for l in store.active_listings()} == {"cheap", "pricey"}
+    data = json.loads((repo / "listings.json").read_text(encoding="utf-8"))
+    ids = {rec["id"] for rec in data["listings"]}
+    assert ids == {"cheap"}  # pricey excluded from the JSON
+    store.close()
+
+
+def test_json_export_keeps_all_house_sizes(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    pub, repo = _pub(tmp_path)
+    s = Search(name="Cork sharing", category="sharing", params={})
+    adapter = FakeAdapter(
+        {"Cork sharing": [mkshare("1", 700), mkshare("2", 700)]},
+        details={"/share/1": {"_overview": {"sharing with": "9"}}},
+    )
+    run_cycle(cfg([s], filters={"max_price": 800, "max_sharing_with": 3},
+                  publish=pub),
+              store, adapter, RecordingNotifier(), logging.getLogger("t"))
+    data = json.loads((repo / "listings.json").read_text(encoding="utf-8"))
+    # max_sharing_with is NOT applied to the JSON: the big house stays in
+    assert {rec["id"] for rec in data["listings"]} == {"1", "2"}
+    store.close()
+
+
 def test_loop_closes_adapter_each_iteration(tmp_path):
     store = Store(str(tmp_path / "t.db"))
     s = Search(name="s1", category="rent", params={})

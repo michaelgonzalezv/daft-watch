@@ -62,6 +62,16 @@ def test_parse_price_range_weekly_range_normalized():
     assert parse_price_range("From €150 to €175 per week") == round(150 * 52 / 12)
 
 
+def test_parse_price_range_teaser_low_end_uses_high():
+    # daft teaser: "From €1 to €210 per week" -> low end is a placeholder
+    assert parse_price_range("From €1 to €210 per week") == round(210 * 52 / 12)
+
+
+def test_parse_price_range_real_range_keeps_low_end():
+    # low end is a genuine asking price, not a teaser
+    assert parse_price_range("From €725 to €750 per month") == 725
+
+
 def test_parse_price_range_delegates_plain():
     assert parse_price_range("€1750") == 1750
 

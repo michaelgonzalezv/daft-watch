@@ -105,8 +105,17 @@ def run_cycle(
     if config.publish is not None:
         try:
             now = datetime.now(timezone.utc)
+            # daft's rentalPrice_to URL param filters on the NATIVE (often
+            # weekly) price, so price-ineligible listings come back. Apply the
+            # monthly max_price / keyword cut to the JSON too — but NOT
+            # max_sharing_with: the dashboard has its own adjustable house-size
+            # control and wants every price-eligible listing.
+            export_listings = filters.apply(
+                store.active_listings(),
+                {k: v for k, v in config.filters.items() if k != "max_sharing_with"},
+            )
             export.write_json(
-                config.publish.json_path, store.active_listings(), now.isoformat()
+                config.publish.json_path, export_listings, now.isoformat()
             )
             export.git_publish(
                 config.publish.repo_dir,
