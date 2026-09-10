@@ -29,14 +29,16 @@ publish:
   git_push: true
 
 email:
+  max_price: 800          # digest only; the dashboard ignores this
   distance_km:
     dublin: 6
     cork: 4
     limerick: 4
 
 filters:
-  max_price: 800
-  max_sharing_with: 4
+  # max_price here would also cap the dashboard — leave it out and use
+  # email.max_price if you only want the digest limited.
+  max_sharing_with: 4     # digest only; the dashboard has its own control
 
 notify:
   min_event_types: [NEW, PRICE_DROP]

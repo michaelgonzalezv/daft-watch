@@ -44,6 +44,7 @@ class Config:
     detail_max_per_cycle: int = 60
     publish: PublishConfig | None = None
     email_distance_km: dict[str, float] = field(default_factory=dict)
+    email_max_price: int | None = None
 
 
 @dataclass
@@ -107,12 +108,15 @@ def load_config(path: str | os.PathLike) -> Config:
             git_push=publish_raw.get("git_push", True),
         )
 
-    # Parse email.distance_km (optional)
+    # Parse email.distance_km / email.max_price (both optional)
     email_distance_km: dict[str, float] = {}
     email_raw = data.get("email") or {}
     distance_raw = email_raw.get("distance_km") or {}
     if distance_raw:
         email_distance_km = {k: float(v) for k, v in distance_raw.items()}
+    email_max_price = email_raw.get("max_price")
+    if email_max_price is not None:
+        email_max_price = int(email_max_price)
 
     return Config(
         interval_minutes=data.get("interval_minutes", 30),
@@ -125,4 +129,5 @@ def load_config(path: str | os.PathLike) -> Config:
         detail_max_per_cycle=data.get("detail_max_per_cycle", 60),
         publish=publish,
         email_distance_km=email_distance_km,
+        email_max_price=email_max_price,
     )

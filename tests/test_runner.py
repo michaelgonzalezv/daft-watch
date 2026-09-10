@@ -59,13 +59,15 @@ class RecordingNotifier:
 
 
 def cfg(searches, min_types=("NEW", "PRICE_DROP", "GONE"), filters=None,
-        publish=None, email_distance_km=None, detail_price_cap=800):
+        publish=None, email_distance_km=None, detail_price_cap=800,
+        email_max_price=None):
     return Config(searches=list(searches), gone_after_cycles=1,
                   filters=filters or {},
                   notify=NotifyConfig(min_event_types=list(min_types)),
                   detail_price_cap=detail_price_cap,
                   publish=publish,
-                  email_distance_km=email_distance_km or {})
+                  email_distance_km=email_distance_km or {},
+                  email_max_price=email_max_price)
 
 
 def _init_repo(path):
@@ -300,6 +302,25 @@ def test_full_cycle_detail_and_export(tmp_path):
     assert "data: rentals listings" in log
 
     assert r.events_sent == 2
+    store.close()
+
+
+def test_email_max_price_narrows_digest_not_export(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    pub, repo = _pub(tmp_path)
+    s = Search(name="Dublin sharing", category="sharing", params={})
+    cheap = mkshare("c", 700, lat=_DUBLIN[0], lng=_DUBLIN[1])
+    pricey = mkshare("p", 1500, lat=_DUBLIN[0], lng=_DUBLIN[1])
+    adapter = FakeAdapter({"Dublin sharing": [cheap, pricey]})
+    notifier = RecordingNotifier()
+    r = run_cycle(cfg([s], publish=pub, email_max_price=800,
+                      email_distance_km={"dublin": 6}),
+                  store, adapter, notifier, logging.getLogger("t"))
+
+    data = json.loads((repo / "listings.json").read_text(encoding="utf-8"))
+    assert {rec["id"] for rec in data["listings"]} == {"c", "p"}  # both exported
+    assert r.events_sent == 1                                     # only €700 emailed
+    assert {l.id for _, l in notifier.digests[0]} == {"c"}
     store.close()
 
 

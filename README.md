@@ -12,8 +12,9 @@ terms forbid that.
 
 The main use case this repo is deployed for. Every 30 minutes it:
 
-- **Watches** daft.ie house-shares in Cork, Limerick and Dublin priced at or
-  below €800 (`config.yaml` → `searches`, three `category: sharing` entries).
+- **Watches** daft.ie house-shares in Cork, Limerick and Dublin (`config.yaml`
+  → `searches`, three `category: sharing` entries). The dashboard carries every
+  price; `email.max_price` keeps the digest to affordable rooms.
 - **Enriches** each new candidate by loading its detail page once and pulling
   "Sharing with", rooms available, preferences, owner-occupied, available-from,
   bathroom type and description. Detail pages are fetched once and never again.

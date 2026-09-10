@@ -152,7 +152,13 @@ def run_cycle(
             logger.exception("export/publish failed")
             result.publish_ok = False
 
-    allowed_ids = {l.id for l in filters.apply(fetched, config.filters)}
+    # The email is deliberately narrower than the dashboard: on top of every
+    # configured filter it also honours email.max_price (the dashboard shows
+    # every price; the digest stays focused on affordable rooms).
+    email_filters = dict(config.filters)
+    if config.email_max_price is not None:
+        email_filters["max_price"] = config.email_max_price
+    allowed_ids = {l.id for l in filters.apply(fetched, email_filters)}
     min_types = set(config.notify.min_event_types)
 
     to_send: list[tuple] = []
