@@ -10,7 +10,8 @@ Files here:
 | File | Purpose |
 |---|---|
 | `run-rentals.bat` | Loads `.env`, runs one cycle, appends to `data\rentals.log` |
-| `DaftWatch-Rentals.xml` | Importable Task Scheduler task (30-min repeat, forever) |
+| `run-hidden.vbs` | Starts `run-rentals.bat` with no console window; the task runs this |
+| `DaftWatch-Rentals.xml` | Task Scheduler task (30-min repeat, forever, hidden) |
 
 ## Prerequisites (once)
 
@@ -64,27 +65,30 @@ Watch it: `type data\rentals.log`.
 
 ## Import the scheduled task
 
-> Already registered on this machine as **"DaftWatch Rentals"** (30-min repeat,
-> interactive logon). The steps below are for reinstalling or another machine.
+> Already registered on this machine as **"DaftWatch Rentals"** (30-min repeat
+> forever, interactive logon, no console window). The steps below are for
+> reinstalling or another machine.
 
-From a command prompt in `D:\Github\daft-watch` (no admin needed for an
-`InteractiveToken` task):
+Register it from **PowerShell** in `D:\Github\daft-watch` (no admin needed for
+an `InteractiveToken` task). This is the reliable path — `schtasks /xml`
+chokes on the file encoding:
 
+```powershell
+$a = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument '"D:\Github\daft-watch\deploy\run-hidden.vbs"'
+$t = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes 30)
+$p = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+$s = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2) -StartWhenAvailable
+$s.DisallowStartIfOnBatteries = $false      # it's a laptop
+$s.StopIfGoingOnBatteries = $false
+Register-ScheduledTask -TaskName 'DaftWatch Rentals' -Action $a -Trigger $t -Principal $p -Settings $s -Force
 ```
-schtasks /create /tn "DaftWatch Rentals" /xml deploy\DaftWatch-Rentals.xml
-```
 
-`DaftWatch-Rentals.xml` is saved as **UTF-16** — that is what `schtasks /xml`
-requires; do not re-save it as UTF-8.
+A `-RepetitionInterval` with no `-RepetitionDuration` repeats forever. Do not
+use `schtasks /change /tr` on the live task — it rewrites the trigger with a
+33-day duration and the repeat silently stops.
 
-Or: open **Task Scheduler** → **Action** → **Import Task...** → pick
-`deploy\DaftWatch-Rentals.xml`.
-
-Simplest alternative (fewer options — no 2h cap, no "skip if already running"):
-
-```
-schtasks /create /tn "DaftWatch Rentals" /tr "D:\Github\daft-watch\deploy\run-rentals.bat" /sc minute /mo 30 /f
-```
+Or import `deploy\DaftWatch-Rentals.xml` (saved as **UTF-16**) via **Task
+Scheduler → Action → Import Task…**.
 
 The task runs as the current interactive user (`InteractiveToken`) — it only
 fires while you are logged on, and needs no stored password. It will not stack
