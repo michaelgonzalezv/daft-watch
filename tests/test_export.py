@@ -77,12 +77,30 @@ def test_to_record_values_match_listing():
 def test_write_json_valid_and_count(tmp_path):
     p = tmp_path / "listings.json"
     ls = [mk("1"), mk("2"), mk("3")]
-    write_json(str(p), ls, "2026-09-09T10:00:00")
+    assert write_json(str(p), ls, "2026-09-09T10:00:00") is True
     data = json.loads(p.read_text(encoding="utf-8"))
     assert data["generated_at"] == "2026-09-09T10:00:00"
     assert data["count"] == 3
     assert len(data["listings"]) == 3
     assert not (tmp_path / "listings.json.tmp").exists()
+    assert p.read_text(encoding="utf-8").endswith("\n")
+
+
+def test_write_json_skips_when_listings_unchanged(tmp_path):
+    p = tmp_path / "listings.json"
+    ls = [mk("1", price_eur=700), mk("2", price_eur=800)]
+    assert write_json(str(p), ls, "2026-09-09T10:00:00") is True
+    first = p.read_text(encoding="utf-8")
+
+    # same listings (input order irrelevant), different generated_at -> no rewrite
+    assert write_json(str(p), list(reversed(ls)), "2026-09-09T11:30:00") is False
+    assert p.read_text(encoding="utf-8") == first  # generated_at untouched
+
+    # a changed listing -> rewrites, returns True
+    assert write_json(str(p), [mk("1", price_eur=650), mk("2", price_eur=800)],
+                      "2026-09-09T12:00:00") is True
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["generated_at"] == "2026-09-09T12:00:00"
 
 
 def test_write_json_dates_are_iso_strings(tmp_path):
@@ -158,6 +176,73 @@ def test_git_publish_commits_and_skips_unchanged(tmp_path):
     count = subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=tmp_path,
                            capture_output=True, text=True).stdout.strip()
     assert count == "3"
+
+
+def test_git_publish_commit_is_scoped_to_the_pathspec(tmp_path):
+    _init_repo(tmp_path)
+    # an unrelated staged change the user is working on
+    (tmp_path / "other.txt").write_text("user WIP")
+    subprocess.run(["git", "add", "other.txt"], cwd=tmp_path, check=True,
+                   capture_output=True)
+
+    (tmp_path / "f.json").write_text('{"a":1}')
+    assert git_publish(str(tmp_path), "f.json", "data msg", push=False) is True
+
+    names = subprocess.run(
+        ["git", "show", "--name-only", "--format=", "HEAD"],
+        cwd=tmp_path, capture_output=True, text=True,
+    ).stdout.split()
+    assert names == ["f.json"]  # other.txt NOT swept into the data commit
+
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=tmp_path, capture_output=True, text=True,
+    ).stdout.split()
+    assert "other.txt" in staged  # still staged, untouched
+
+
+def test_git_publish_pulls_before_commit(tmp_path):
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", str(origin)], check=True,
+                   capture_output=True)
+
+    def _clone(name):
+        d = tmp_path / name
+        subprocess.run(["git", "clone", str(origin), str(d)], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(d), "config", "user.email", "t@t.t"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(d), "config", "user.name", "T"],
+                       check=True, capture_output=True)
+        return d
+
+    a = _clone("a")
+    (a / "seed.txt").write_text("seed")
+    subprocess.run(["git", "-C", str(a), "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(a), "commit", "-m", "init"], check=True,
+                   capture_output=True)
+    subprocess.run(["git", "-C", str(a), "push", "-u", "origin", "HEAD"],
+                   check=True, capture_output=True)
+
+    b = _clone("b")
+    (b / "upstream.txt").write_text("ahead")
+    subprocess.run(["git", "-C", str(b), "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(b), "commit", "-m", "upstream move"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(b), "push"], check=True, capture_output=True)
+
+    # a is now behind origin; git_publish must pull --rebase then commit + push
+    (a / "f.json").write_text('{"a":1}')
+    assert git_publish(str(a), "f.json", "data msg", push=True) is True
+
+    log = subprocess.run(["git", "-C", str(a), "log", "--oneline"],
+                         capture_output=True, text=True).stdout
+    assert "upstream move" in log  # pull --rebase folded the remote commit in
+    names = subprocess.run(
+        ["git", "-C", str(a), "show", "--name-only", "--format=", "HEAD"],
+        capture_output=True, text=True,
+    ).stdout.split()
+    assert names == ["f.json"]
 
 
 def test_git_publish_bogus_repo_returns_false(tmp_path, caplog):
