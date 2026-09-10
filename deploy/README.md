@@ -36,9 +36,9 @@ Files here:
    local `caleta-web` checkout that has push rights:
    ```yaml
    publish:
-     json_path: "D:/Github/caleta-web/tools/rentals/listings.json"
+     json_path: "D:/Github/caleta-web/dashboards/rentals/listings.json"
      repo_dir:  "D:/Github/caleta-web"
-     file_rel:  "tools/rentals/listings.json"
+     file_rel:  "dashboards/rentals/listings.json"
      git_push:  true
    ```
 

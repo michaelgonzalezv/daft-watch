@@ -26,7 +26,7 @@ It then produces **two outputs**:
    ascending. Rendered as an inline-styled table.
 2. **`listings.json`** — every active listing, written to a `caleta-web`
    checkout and `git push`ed. It powers the interactive browse/filter page at
-   **`caleta.tech/tools/rentals`**.
+   **`caleta.tech/dashboards/rentals`**.
 
 ### `config.yaml` shape
 
@@ -38,9 +38,9 @@ detail_price_cap: 800        # only detail-fetch listings at/under this
 detail_max_per_cycle: 60     # cap detail fetches per cycle (spreads the warm-up)
 
 publish:                     # omit the whole block to disable JSON export + git
-  json_path: "D:/Github/caleta-web/tools/rentals/listings.json"
+  json_path: "D:/Github/caleta-web/dashboards/rentals/listings.json"
   repo_dir:  "D:/Github/caleta-web"
-  file_rel:  "tools/rentals/listings.json"
+  file_rel:  "dashboards/rentals/listings.json"
   git_push:  true
 
 email:
