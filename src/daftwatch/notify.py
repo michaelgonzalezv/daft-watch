@@ -33,7 +33,22 @@ def _esc(value) -> str:
     return _html.escape("" if value is None else str(value))
 
 
-def _digest_html(items: list[tuple[Event, Listing]], summary: str) -> str:
+def _digest_lines(items: list[tuple[Event, Listing]]) -> list[str]:
+    lines: list[str] = []
+    for event, listing in items:
+        lines.append(f"[{event.type}] {listing.title}")
+        if event.type in ("PRICE_DROP", "PRICE_UP"):
+            lines.append(f"  price: {event.old_price} -> {event.new_price} EUR/month")
+        else:
+            lines.append(f"  price: {listing.price_eur} EUR/month")
+        beds = "?" if listing.beds is None else listing.beds
+        lines.append(f"  {beds} bed | {listing.area or '-'}")
+        lines.append(f"  {listing.url}")
+        lines.append("")
+    return lines
+
+
+def _digest_table(items: list[tuple[Event, Listing]]) -> str:
     head = (
         "<tr>"
         + "".join(
@@ -80,10 +95,22 @@ def _digest_html(items: list[tuple[Event, Listing]], summary: str) -> str:
             )
             + "</tr>"
         )
-    return (
-        f"<h2>daft-watch digest</h2><p>{_esc(summary)}</p>"
-        f'<table style="{_TABLE_STYLE}">{head}{"".join(rows)}</table>'
-    )
+    return f'<table style="{_TABLE_STYLE}">{head}{"".join(rows)}</table>'
+
+
+def _digest_html(
+    items: list[tuple[Event, Listing]],
+    watchlist_items: list[tuple[Event, Listing]],
+    summary: str,
+) -> str:
+    body = f"<h2>daft-watch digest</h2><p>{_esc(summary)}</p>"
+    if watchlist_items:
+        body += "<h3>&#11088; Your watchlist</h3>" + _digest_table(watchlist_items)
+    if items:
+        if watchlist_items:
+            body += "<h3>Other updates</h3>"
+        body += _digest_table(items)
+    return body
 
 
 class EmailNotifier:
@@ -110,34 +137,40 @@ class EmailNotifier:
     def send_alert(self, subject: str, body: str) -> None:
         self._send(f"[daft-watch] {subject}", body)
 
-    def send_digest(self, items: list[tuple[Event, Listing]]) -> None:
-        if not items:
+    def send_digest(
+        self,
+        items: list[tuple[Event, Listing]],
+        watchlist_items: list[tuple[Event, Listing]] | None = None,
+    ) -> None:
+        watchlist_items = watchlist_items or []
+        if not items and not watchlist_items:
             return
+
         counts: dict[str, int] = {}
-        for event, _ in items:
+        for event, _ in items + watchlist_items:
             counts[event.type] = counts.get(event.type, 0) + 1
         parts = [
             f"{counts[t]} {_LABEL.get(t, t.lower())}"
             for t in ("NEW", "PRICE_DROP", "PRICE_UP", "GONE", "BACK")
             if t in counts
         ]
-        subject = (
-            f"[daft-watch] {len(items)} update(s): " + ", ".join(parts)
-        )
+        total = len(items) + len(watchlist_items)
+        subject = f"[daft-watch] {total} update(s): " + ", ".join(parts)
+        if watchlist_items:
+            subject += f" ({len(watchlist_items)} on your watchlist)"
 
         lines: list[str] = []
-        for event, listing in items:
-            lines.append(f"[{event.type}] {listing.title}")
-            if event.type in ("PRICE_DROP", "PRICE_UP"):
-                lines.append(
-                    f"  price: {event.old_price} -> {event.new_price} EUR/month"
-                )
-            else:
-                lines.append(f"  price: {listing.price_eur} EUR/month")
-            beds = "?" if listing.beds is None else listing.beds
-            lines.append(f"  {beds} bed | {listing.area or '-'}")
-            lines.append(f"  {listing.url}")
-            lines.append("")
+        if watchlist_items:
+            lines.append("=== YOUR WATCHLIST ===")
+            lines += _digest_lines(watchlist_items)
+        if items:
+            if watchlist_items:
+                lines.append("=== OTHER UPDATES ===")
+            lines += _digest_lines(items)
 
-        summary = f"{len(items)} update(s): " + ", ".join(parts)
-        self._send(subject, "\n".join(lines), _digest_html(items, summary))
+        summary = f"{total} update(s): " + ", ".join(parts)
+        self._send(
+            subject,
+            "\n".join(lines),
+            _digest_html(items, watchlist_items, summary),
+        )

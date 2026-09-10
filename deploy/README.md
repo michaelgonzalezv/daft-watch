@@ -28,6 +28,11 @@ Files here:
    plain `KEY=VALUE` lines — do **not** put trailing `# comments` on a value
    line (they would be swallowed into the value).
 
+   Optional: `FAVS_API` (`https://www.caleta.tech/api/favs`) + `FAVS_KEY` (the
+   dashboard's favourites passphrase) let the digest add a "watched room
+   updated / back on the market" section that ignores the price/distance
+   filters.
+
 3. **Create `data\config.yaml`:**
    ```
    mkdir data

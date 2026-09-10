@@ -53,8 +53,10 @@ class FakeAdapter(SearchAdapter):
 
 
 class RecordingNotifier:
-    def __init__(self): self.digests = []
-    def send_digest(self, items): self.digests.append(list(items))
+    def __init__(self): self.digests = []; self.watchlists = []
+    def send_digest(self, items, watchlist_items=None):
+        self.digests.append(list(items))
+        self.watchlists.append(list(watchlist_items or []))
     def send_alert(self, s, b): pass
 
 
@@ -151,7 +153,7 @@ def test_min_event_types_gate(tmp_path):
 
 
 class BrokenNotifier:
-    def send_digest(self, items): raise RuntimeError("smtp down")
+    def send_digest(self, items, watchlist_items=None): raise RuntimeError("smtp down")
     def send_alert(self, s, b): pass
 
 
@@ -259,7 +261,7 @@ def test_loop_survives_run_cycle_exception(tmp_path):
     store = Store(str(tmp_path / "t.db"))
 
     class ExplodingNotifier(CountingNotifier):
-        def send_digest(self, items):
+        def send_digest(self, items, watchlist_items=None):
             raise RuntimeError("smtp down")
 
     s = Search(name="s1", category="rent", params={})
@@ -302,6 +304,21 @@ def test_full_cycle_detail_and_export(tmp_path):
     assert "data: rentals listings" in log
 
     assert r.events_sent == 2
+    store.close()
+
+
+def test_watchlist_events_bypass_the_email_filters(tmp_path, monkeypatch):
+    monkeypatch.setattr("daftwatch.runner.fetch_watchlist", lambda a, k: {"w1"})
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Dublin sharing", category="sharing", params={})
+    far = mkshare("w1", 700, lat=_DUBLIN[0] + 0.2, lng=_DUBLIN[1])   # ~22 km out
+    near = mkshare("n1", 700, lat=_DUBLIN[0], lng=_DUBLIN[1])
+    adapter = FakeAdapter({"Dublin sharing": [far, near]})
+    notifier = RecordingNotifier()
+    run_cycle(cfg([s], email_distance_km={"dublin": 6}),
+              store, adapter, notifier, logging.getLogger("t"))
+    assert {l.id for _, l in notifier.digests[0]} == {"n1"}      # distance-filtered
+    assert {l.id for _, l in notifier.watchlists[0]} == {"w1"}   # kept anyway
     store.close()
 
 

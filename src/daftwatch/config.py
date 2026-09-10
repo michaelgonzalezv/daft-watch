@@ -49,6 +49,8 @@ class Config:
     email_max_price: int | None = None
     export_gone_within_days: int = 30   # keep off-market listings this long
     events_history_days: int = 90       # events.json window
+    watchlist_api: str | None = None    # dashboard /api/favs URL (from env FAVS_API)
+    watchlist_key: str | None = None    # its x-fav-key (from env FAVS_KEY)
 
 
 @dataclass

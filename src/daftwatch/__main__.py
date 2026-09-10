@@ -27,6 +27,8 @@ def _parser() -> argparse.ArgumentParser:
 
 def build(args, env: Mapping[str, str]):
     config = load_config(args.config)
+    config.watchlist_api = env.get("FAVS_API")
+    config.watchlist_key = env.get("FAVS_KEY")
     smtp = SmtpConfig.from_env(env)
     db_path = Path(args.db)
     db_path.parent.mkdir(parents=True, exist_ok=True)

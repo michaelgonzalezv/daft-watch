@@ -17,6 +17,7 @@ from daftwatch.config import Config
 from daftwatch.export import _date_desc_key
 from daftwatch.notify import EmailNotifier
 from daftwatch.store import Store
+from daftwatch.watchlist import fetch_watchlist
 
 
 @dataclass
@@ -196,15 +197,37 @@ def run_cycle(
             key=lambda p: (p[1].price_eur, _date_desc_key(p[1].first_published))
         )
 
+    # 4b. watchlist: any change on a room the user is watching (♥ on the
+    #     dashboard), regardless of the price / distance / min_event_types
+    #     filters — this is the "the room I liked is available again" signal.
+    watch_send: list[tuple] = []
+    watched = fetch_watchlist(config.watchlist_api, config.watchlist_key)
+    if watched:
+        _WATCH_TYPES = {"NEW", "PRICE_DROP", "PRICE_UP", "BACK", "GONE"}
+        in_normal = {l.id for _, l in to_send}
+        for event in store.pending_events():
+            if (
+                event.listing_id not in watched
+                or event.type not in _WATCH_TYPES
+                or event.listing_id in in_normal
+            ):
+                continue
+            listing = store.get_listing(event.listing_id)
+            if listing is not None:
+                watch_send.append((event, listing))
+        watch_send.sort(
+            key=lambda p: (p[1].price_eur, _date_desc_key(p[1].first_published))
+        )
+
     sent_ids: list[int] = []
-    if to_send:
+    if to_send or watch_send:
         try:
-            notifier.send_digest(to_send)
+            notifier.send_digest(to_send, watchlist_items=watch_send)
         except Exception:
             logger.exception("send_digest failed; events stay pending")
             raise
-        sent_ids = [e.id for e, _ in to_send]
-        result.events_sent = len(to_send)
+        sent_ids = [e.id for e, _ in to_send] + [e.id for e, _ in watch_send]
+        result.events_sent = len(to_send) + len(watch_send)
 
     # Resolve every pending event whose listing was part of this cycle's fetched
     # set: it was either sent above or intentionally dropped (wrong type, filter,
