@@ -112,6 +112,7 @@ def to_listing(d: dict, category: str) -> Listing:
         raw=d,
         source="daft",
         currency="EUR",
+        country="Ireland",
         price_native=price,
         price_weekly=parse_int(price_text.replace(",", "")) if weekly else None,
         first_published=_iso_from_ms(d.get("publishDate")),

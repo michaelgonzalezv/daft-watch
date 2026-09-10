@@ -25,6 +25,7 @@ class Listing:
     raw: dict
     source: str = "daft"
     currency: str = "EUR"
+    country: str = "Ireland"
     price_native: int = 0
     price_weekly: int | None = None
     first_published: str | None = None

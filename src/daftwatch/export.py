@@ -20,7 +20,7 @@ _log = logging.getLogger("daftwatch")
 def to_record(l: Listing) -> dict:
     """Project a :class:`Listing` onto the frozen dashboard record.
 
-    Exactly 25 keys. ``distance_centre_km`` comes from
+    Exactly 26 keys. ``distance_centre_km`` comes from
     ``l.distances_km.get("centre")`` (float or ``None``); every other key is the
     same-named ``Listing`` attribute. ``owner_occupied`` stays bool/None and
     ``description`` stays str/None.
@@ -29,6 +29,7 @@ def to_record(l: Listing) -> dict:
         "id": l.id,
         "source": l.source,
         "currency": l.currency,
+        "country": l.country,
         "url": l.url,
         "title": l.title,
         "price_eur": l.price_eur,
