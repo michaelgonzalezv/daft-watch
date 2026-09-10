@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -243,6 +244,28 @@ def run_cycle(
         if ev.id not in sent_set and ev.listing_id in seen
     ]
     store.mark_notified(sent_ids + suppressed_ids)
+
+    # 5. once a day, commit a plain-SQL dump of the DB somewhere durable (the
+    #    live DB is laptop-only and not in git). Never fails the cycle.
+    if config.backup is not None:
+        try:
+            p = config.backup.sql_path
+            stale = (not os.path.exists(p)) or (
+                time.time() - os.path.getmtime(p)
+                > config.backup.every_hours * 3600
+            )
+            if stale:
+                store.dump_sql(p)
+                rel = os.path.relpath(p, config.backup.repo_dir).replace(os.sep, "/")
+                now = datetime.now(timezone.utc)
+                export.git_publish(
+                    config.backup.repo_dir,
+                    [rel],
+                    f"backup: db dump {now:%Y-%m-%d}",
+                    config.backup.git_push,
+                )
+        except Exception:
+            logger.exception("db backup failed (non-fatal)")
 
     return result
 

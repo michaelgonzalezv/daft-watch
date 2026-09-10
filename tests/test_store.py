@@ -259,6 +259,19 @@ def test_export_listings_includes_recently_gone(store):
     assert {l.id for l in store.export_listings(gone_within_days=-1)} == {"keep"}
 
 
+def test_dump_sql_roundtrips(store, tmp_path):
+    import sqlite3 as _sq
+    store.begin_cycle()
+    store.sync("s", [mk_share("x", 700), mk_share("y", 650)])
+    p = tmp_path / "sub" / "dump.sql"
+    store.dump_sql(str(p))
+    assert p.exists() and "CREATE TABLE" in p.read_text(encoding="utf-8")
+    restored = _sq.connect(":memory:")
+    restored.executescript(p.read_text(encoding="utf-8"))
+    n = restored.execute("SELECT COUNT(*) FROM listings").fetchone()[0]
+    assert n == 2
+
+
 def test_events_history_groups_and_orders(store):
     store.begin_cycle()
     store.sync("s", [mk_share("a", 700)])

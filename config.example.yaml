@@ -34,6 +34,14 @@ publish:
 export_gone_within_days: 30   # keep off-market listings in listings.json this long
 events_history_days: 90       # events.json window
 
+# optional: once a day, commit a plain-SQL dump of the DB (the live DB is
+# laptop-only and gitignored). Restore with:  sqlite3 new.db < backups/daft.sql
+backup:
+  sql_path: "D:/Github/daft-watch/backups/daft.sql"
+  repo_dir: "D:/Github/daft-watch"
+  git_push: true
+  every_hours: 24
+
 email:
   max_price: 800          # digest only; the dashboard ignores this
   distance_km:

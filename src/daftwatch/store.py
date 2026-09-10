@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -167,6 +168,7 @@ def _row_to_listing(row: sqlite3.Row) -> Listing:
         city=row["city"],
         previous_price=row["previous_price"],
         first_seen=row["first_seen"],
+        last_seen=row["last_seen"],
         distances_km=distances,
         detail_fetched=bool(row["detail_fetched"]),
     )
@@ -449,6 +451,26 @@ class Store:
             Event(r["id"], r["listing_id"], r["type"], r["old_price"], r["new_price"])
             for r in rows
         ]
+
+    def dump_sql(self, path: str) -> None:
+        """Write a plain-SQL dump of the whole DB (``sqlite3 db < dump`` to
+        restore). Atomic: goes to ``path + '.tmp'`` then ``os.replace``.
+        """
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                for line in self._db.iterdump():
+                    fh.write(line + "\n")
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
 
     def mark_notified(self, event_ids: list[int]) -> None:
         now = _now()

@@ -35,6 +35,14 @@ class PublishConfig:
 
 
 @dataclass
+class BackupConfig:
+    sql_path: str
+    repo_dir: str
+    git_push: bool = True
+    every_hours: int = 24
+
+
+@dataclass
 class Config:
     interval_minutes: int = 30
     gone_after_cycles: int = 2
@@ -51,6 +59,7 @@ class Config:
     events_history_days: int = 90       # events.json window
     watchlist_api: str | None = None    # dashboard /api/favs URL (from env FAVS_API)
     watchlist_key: str | None = None    # its x-fav-key (from env FAVS_KEY)
+    backup: "BackupConfig | None" = None
 
 
 @dataclass
@@ -116,6 +125,16 @@ def load_config(path: str | os.PathLike) -> Config:
             events_rel=publish_raw.get("events_rel"),
         )
 
+    backup = None
+    backup_raw = data.get("backup")
+    if backup_raw is not None:
+        backup = BackupConfig(
+            sql_path=backup_raw["sql_path"],
+            repo_dir=backup_raw["repo_dir"],
+            git_push=backup_raw.get("git_push", True),
+            every_hours=int(backup_raw.get("every_hours", 24)),
+        )
+
     # Parse email.distance_km / email.max_price (both optional)
     email_distance_km: dict[str, float] = {}
     email_raw = data.get("email") or {}
@@ -140,4 +159,5 @@ def load_config(path: str | os.PathLike) -> Config:
         email_max_price=email_max_price,
         export_gone_within_days=data.get("export_gone_within_days", 30),
         events_history_days=data.get("events_history_days", 90),
+        backup=backup,
     )
