@@ -143,9 +143,17 @@ def _migrate(db: sqlite3.Connection) -> None:
     if version >= _SCHEMA_VERSION:
         return
     existing = {r[1] for r in db.execute("PRAGMA table_info(listings)")}
+    country_is_new = "country" not in existing
     for name, decl in _ADDED_COLUMNS:
         if name not in existing:
             db.execute(f"ALTER TABLE listings ADD COLUMN {name} {decl}")
+    if country_is_new:
+        # ADD COLUMN backfills every existing row with the 'Ireland' default,
+        # which is wrong for any row already scraped from a non-daft source —
+        # repair those from the source they were actually fetched from.
+        db.execute(
+            "UPDATE listings SET country='Canada' WHERE source='kijiji'"
+        )
     db.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
     db.commit()
 

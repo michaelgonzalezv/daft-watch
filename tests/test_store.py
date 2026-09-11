@@ -139,6 +139,59 @@ def test_country_round_trips_through_sync_and_update(store):
     assert store.get_listing("ie1").country == "Ireland"
 
 
+def test_migration_backfills_country_for_existing_kijiji_rows(tmp_path):
+    # A v5 DB (source/currency exist, country doesn't) already holding a
+    # kijiji row from before this migration: ADD COLUMN country would give it
+    # the 'Ireland' default like everything else, which is wrong — it must
+    # be repaired from its own source instead.
+    p = str(tmp_path / "v5.db")
+    db = sqlite3.connect(p)
+    db.executescript("""
+        CREATE TABLE listings (
+            id TEXT PRIMARY KEY, category TEXT, title TEXT, url TEXT,
+            price_eur INTEGER, beds INTEGER, baths INTEGER, property_type TEXT,
+            area TEXT, county TEXT, lat REAL, lng REAL, raw_json TEXT,
+            first_seen TEXT, last_seen TEXT,
+            active INTEGER NOT NULL DEFAULT 1, missing_cycles INTEGER NOT NULL DEFAULT 0,
+            source TEXT DEFAULT 'daft', currency TEXT DEFAULT 'EUR',
+            price_native INTEGER DEFAULT 0, price_weekly INTEGER,
+            first_published TEXT, last_updated TEXT, sharing_with INTEGER,
+            rooms_available INTEGER, preferences TEXT, owner_occupied INTEGER,
+            available_from TEXT, bathroom_type TEXT, description TEXT,
+            room_type TEXT, city TEXT, detail_json TEXT,
+            detail_fetched INTEGER NOT NULL DEFAULT 0, previous_price INTEGER,
+            agent_phone TEXT, agent_name TEXT
+        );
+        CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, listing_id TEXT, type TEXT,
+            old_price INTEGER, new_price INTEGER, detected_at TEXT
+        );
+        CREATE TABLE notified (event_id INTEGER PRIMARY KEY, sent_at TEXT);
+        PRAGMA user_version = 5;
+    """)
+    db.execute(
+        "INSERT INTO listings (id, category, title, url, price_eur, "
+        "first_seen, last_seen, source, currency) VALUES "
+        "('kj1','sharing','Room','https://kijiji.ca/1', 800, 't0', 't0', "
+        "'kijiji', 'CAD')"
+    )
+    db.execute(
+        "INSERT INTO listings (id, category, title, url, price_eur, "
+        "first_seen, last_seen, source, currency) VALUES "
+        "('d1','sharing','Room','https://daft.ie/1', 700, 't0', 't0', "
+        "'daft', 'EUR')"
+    )
+    db.commit()
+    db.close()
+
+    s = Store(p)
+    try:
+        assert s.get_listing("kj1").country == "Canada"
+        assert s.get_listing("d1").country == "Ireland"
+    finally:
+        s.close()
+
+
 def test_needs_detail_price_cap_and_limit(store):
     store.begin_cycle()
     store.sync("s", [mk_share("a800", 800), mk_share("b1200", 1200),
