@@ -7,6 +7,7 @@ from daftwatch.kijiji_adapter import (
     KijijiListingsAdapter,
     _classify_gender_pref,
     _classify_property_type,
+    _looks_like_short_term_rate,
     _norm_phone_ca,
     parse_detail,
     to_listing,
@@ -244,3 +245,32 @@ def test_to_listing_uses_classified_gender_pref():
 
     no_signal = dict(_ROOM, title="Room for rent", description="Nice quiet street, close to transit.")
     assert to_listing(no_signal).preferences is None
+
+
+@pytest.mark.parametrize(
+    "title,description,price,expected",
+    [
+        # real cases found in the live data
+        ("Room Available until OCT 31. $50/day or $300/week", "", 50, True),
+        ("Short Term -  Weekly ($450) or Nightly ($99) Stays", "", 99, True),
+        ("Room, Rooms for rent. Fully furnished, all is supplied. $35", "", 35, False),  # no day/night phrasing at all
+        # price plausible as monthly -> don't flag even with a day-rate mention
+        ("High quality female's room", "short term rental $30-100/day, depending on the room", 700, False),
+        # day/night phrasing but price already plausible as monthly
+        ("Nightly cleaning included", "", 900, False),
+        # implausibly low price but no day/night signal — leave alone (this
+        # case is what "contact for price" / a data error looks like, not
+        # something this heuristic should guess about)
+        ("Room for rent, cheap!", "", 50, False),
+    ],
+)
+def test_looks_like_short_term_rate(title, description, price, expected):
+    assert _looks_like_short_term_rate(title, description, price) == expected
+
+
+def test_to_listing_zeroes_price_for_short_term_rate():
+    daily = dict(_ROOM, title="Room Available until OCT 31. $50/day or $300/week",
+                 price={"amount": 5000})  # 50.00 CAD — the day rate, not a real month's rent
+    l = to_listing(daily)
+    assert l.price_native == 0
+    assert l.price_eur == 0

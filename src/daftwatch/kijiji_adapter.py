@@ -107,6 +107,34 @@ def _classify_gender_pref(title: str, description: str) -> str | None:
     return None  # both, or neither — no clean signal
 
 
+# price.amount has no separate "per day/week/month" field on Kijiji (unlike
+# daft, whose price TEXT says "per week" and gets converted) — it's just
+# whatever number the poster typed into the price box. Found by hand, while
+# looking into why a few Canadian rooms were pricing at $30-50/mo (implausible
+# for a real month's rent anywhere in Canada): short-term/nightly listings
+# where that box held the DAILY or NIGHTLY rate, e.g. a title reading "$50/day
+# or $300/week" with price_native == 50.
+#
+# Not a blanket "day/night mentioned anywhere -> distrust the price": one real
+# listing priced at a plausible $700/mo also mentions "$30-100/day, depending
+# on the room" as a flexible short-stay option — that 700 is very likely the
+# real monthly figure, and zeroing it out on the strength of an incidental
+# mention would be its own kind of wrong. Only flag it when the price itself
+# is implausibly low for a month's rent AND the text explicitly reads as a
+# day/night rate — both together, not either alone.
+_SHORT_TERM_RATE_RE = re.compile(
+    r"(\$?\d+\s*/\s*(?:day|night)\b)|(\bnightly\b)|(\bper\s+(?:day|night)\b)", re.I
+)
+_IMPLAUSIBLE_MONTHLY_CAD = 150  # no real Canadian room rents for less per month
+
+
+def _looks_like_short_term_rate(title: str, description: str, price_native: int) -> bool:
+    if price_native <= 0 or price_native >= _IMPLAUSIBLE_MONTHLY_CAD:
+        return False
+    text = f"{title or ''} {description or ''}"
+    return bool(_SHORT_TERM_RATE_RE.search(text))
+
+
 def _fetch_html(url: str, timeout: float = 30.0) -> str:
     """Plain HTTP GET — kijiji.ca serves its full __NEXT_DATA__ page to a bare
     request, no headless browser needed (unlike daft.ie's Cloudflare gate)."""
@@ -163,6 +191,8 @@ def to_listing(entry: dict) -> Listing:
     price = _price_native(entry)
     title = entry.get("title") or ""
     description = entry.get("description") or ""
+    if _looks_like_short_term_rate(title, description, price):
+        price = 0  # same "no reliable price" bucket as Kijiji's own CONTACT listings
     return Listing(
         id="kj" + str(entry.get("id", "")),
         category="sharing",
