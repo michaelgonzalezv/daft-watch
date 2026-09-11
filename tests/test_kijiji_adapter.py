@@ -7,7 +7,7 @@ from daftwatch.kijiji_adapter import (
     KijijiListingsAdapter,
     _classify_gender_pref,
     _classify_property_type,
-    _looks_like_short_term_rate,
+    _detect_rate_period,
     _norm_phone_ca,
     parse_detail,
     to_listing,
@@ -250,27 +250,43 @@ def test_to_listing_uses_classified_gender_pref():
 @pytest.mark.parametrize(
     "title,description,price,expected",
     [
-        # real cases found in the live data
-        ("Room Available until OCT 31. $50/day or $300/week", "", 50, True),
-        ("Short Term -  Weekly ($450) or Nightly ($99) Stays", "", 99, True),
-        ("Room, Rooms for rent. Fully furnished, all is supplied. $35", "", 35, False),  # no day/night phrasing at all
-        # price plausible as monthly -> don't flag even with a day-rate mention
-        ("High quality female's room", "short term rental $30-100/day, depending on the room", 700, False),
+        # real cases found in the live data — both mention day AND week, and
+        # in both, price_native turned out to hold the day/night figure
+        ("Room Available until OCT 31. $50/day or $300/week", "", 50, "day"),
+        ("Short Term -  Weekly ($450) or Nightly ($99) Stays", "", 99, "day"),
+        # a pure weekly rate, no day/night mention at all — the case that
+        # was being silently zeroed before this: $140/week is a real,
+        # usable price, not "no price"
+        ("Great room, $140/week, all bills included", "", 140, "week"),
+        ("", "rent is $130 per week", 130, "week"),
+        ("Room, Rooms for rent. Fully furnished, all is supplied. $35", "", 35, None),  # no period phrasing at all
+        # price plausible as monthly -> don't reinterpret even with a day-rate mention
+        ("High quality female's room", "short term rental $30-100/day, depending on the room", 700, None),
         # day/night phrasing but price already plausible as monthly
-        ("Nightly cleaning included", "", 900, False),
-        # implausibly low price but no day/night signal — leave alone (this
-        # case is what "contact for price" / a data error looks like, not
-        # something this heuristic should guess about)
-        ("Room for rent, cheap!", "", 50, False),
+        ("Nightly cleaning included", "", 900, None),
+        # implausibly low price but no period signal — leave alone (this is
+        # what "contact for price" / a data error looks like, not something
+        # this heuristic should guess about)
+        ("Room for rent, cheap!", "", 50, None),
     ],
 )
-def test_looks_like_short_term_rate(title, description, price, expected):
-    assert _looks_like_short_term_rate(title, description, price) == expected
+def test_detect_rate_period(title, description, price, expected):
+    assert _detect_rate_period(title, description, price) == expected
 
 
-def test_to_listing_zeroes_price_for_short_term_rate():
+def test_to_listing_zeroes_price_for_a_day_rate():
     daily = dict(_ROOM, title="Room Available until OCT 31. $50/day or $300/week",
                  price={"amount": 5000})  # 50.00 CAD — the day rate, not a real month's rent
     l = to_listing(daily)
     assert l.price_native == 0
     assert l.price_eur == 0
+    assert l.price_weekly is None
+
+
+def test_to_listing_converts_a_week_rate_to_monthly():
+    weekly = dict(_ROOM, title="Great room, $140/week, all bills included",
+                  price={"amount": 14000})  # 140.00 CAD
+    l = to_listing(weekly)
+    assert l.price_weekly == 140
+    assert l.price_native == round(140 * 52 / 12)
+    assert l.price_eur == round(140 * 52 / 12)
