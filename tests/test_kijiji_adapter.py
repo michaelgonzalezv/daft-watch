@@ -5,6 +5,7 @@ from daftwatch.adapter import AdapterError, RateLimited
 from daftwatch.config import Search
 from daftwatch.kijiji_adapter import (
     KijijiListingsAdapter,
+    _classify_property_type,
     _norm_phone_ca,
     parse_detail,
     to_listing,
@@ -177,3 +178,36 @@ def test_detail_returns_none_when_delisted():
     a = KijijiListingsAdapter(fetch_html=lambda url: html, sleeper=lambda s: None)
     d = a.detail("https://www.kijiji.ca/v-room-rental-roommate/x/9999999999")
     assert d is None
+
+
+@pytest.mark.parametrize(
+    "title,description,expected",
+    [
+        ("3 bed house for rent", "", "House"),
+        ("", "Spacious townhouse near transit", "House"),
+        ("Room in a bungalow", "", "House"),
+        ("Bright apartment room", "", "Apartment"),
+        ("", "Condo unit, private bedroom", "Apartment"),
+        ("Room in a flat downtown", "", "Apartment"),
+        ("Basement room for rent", "", "Basement"),
+        ("", "Newly renovated basement, female only", "Basement"),
+        # a real title from the site: no house/apartment/basement keyword at all
+        ("Room for Japanese Students – TTC Nearby", "", "Room"),
+        ("", "", "Room"),
+        # genuine conflict — both keywords present, don't guess which wins
+        ("Apartment in a house, private room", "", "Room"),
+    ],
+)
+def test_classify_property_type(title, description, expected):
+    assert _classify_property_type(title, description) == expected
+
+
+def test_to_listing_uses_classified_property_type():
+    house = dict(_ROOM, title="Private room in a house, quiet street")
+    assert to_listing(house).property_type == "House"
+
+    apt = dict(_ROOM, title="Room in a condo downtown")
+    assert to_listing(apt).property_type == "Apartment"
+
+    no_signal = dict(_ROOM, title="Room for rent")
+    assert to_listing(no_signal).property_type == "Room"

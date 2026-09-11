@@ -28,6 +28,38 @@ _UA = (
 
 _log = logging.getLogger("daftwatch")
 
+# Kijiji's "Room Rentals & Roommates" category has no structured house/
+# apartment field (confirmed against the category's own filter definition —
+# only furnished/petsallowed exist as real attributes), so property_type is
+# guessed from title+description keywords. Measured against 46 real Toronto
+# listings: ~59% get a classification, 0% had both a house AND an apartment
+# keyword. A standalone "basement" (no house/apartment word either) gets its
+# own bucket rather than being folded into either guess — in Toronto listings
+# that usually means a self-contained basement apartment, but that's an
+# inference, not confirmed, so it stays visibly distinct instead of silently
+# becoming "Apartment".
+_HOUSE_RE = re.compile(
+    r"\b(house|townhouse|town house|bungalow|semi-detached|duplex|triplex|detached)\b",
+    re.I,
+)
+_APT_RE = re.compile(r"\b(apartment|apt\.?|condo|condominium|flat)\b", re.I)
+_BASEMENT_RE = re.compile(r"\bbasement\b", re.I)
+
+
+def _classify_property_type(title: str, description: str) -> str:
+    text = f"{title or ''} {description or ''}"
+    has_house = bool(_HOUSE_RE.search(text))
+    has_apt = bool(_APT_RE.search(text))
+    if has_house and has_apt:
+        return "Room"  # genuine conflict in the text — don't guess which wins
+    if has_house:
+        return "House"
+    if has_apt:
+        return "Apartment"
+    if _BASEMENT_RE.search(text):
+        return "Basement"
+    return "Room"  # no signal either way — today's default, unchanged
+
 
 def _fetch_html(url: str, timeout: float = 30.0) -> str:
     """Plain HTTP GET — kijiji.ca serves its full __NEXT_DATA__ page to a bare
@@ -91,7 +123,9 @@ def to_listing(entry: dict) -> Listing:
         price_eur=price,
         beds=None,
         baths=None,
-        property_type="Room",
+        property_type=_classify_property_type(
+            entry.get("title") or "", entry.get("description") or ""
+        ),
         area=None,
         county=None,
         lat=coords.get("latitude"),
