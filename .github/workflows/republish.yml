@@ -1,0 +1,68 @@
+name: republish
+
+# Manual only. Fast path: recompute + publish the dashboard exports
+# (listings.json, compare.json, ...) from whatever is ALREADY in the DB —
+# no daft.ie/Kijiji scrape, no Playwright install. For a code change to
+# export.py/regression.py/the dashboard frontend, not for a code change to
+# an adapter/classifier (kijiji_adapter.py, adapter.py) — that still needs
+# a real scrape (`scrape.yml`) to verify against the live sites.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: scrape        # same DB as scrape.yml — never run both at once
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+
+      - name: checkout caleta-web
+        uses: actions/checkout@v4
+        with:
+          repository: michaelgonzalezv/caleta-web
+          token: ${{ secrets.CALETA_TOKEN }}
+          path: caleta-web
+          fetch-depth: 1
+
+      - name: restore DB from db-state branch
+        run: |
+          mkdir -p data
+          if git fetch --no-tags origin db-state 2>/dev/null && git cat-file -e FETCH_HEAD:daft.db 2>/dev/null; then
+            git show FETCH_HEAD:daft.db > data/daft.db
+            echo "DB restored ($(du -h data/daft.db | cut -f1))"
+          else
+            echo "no db-state yet — nothing to republish"
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -e .
+
+      - name: git identity
+        run: |
+          git -C caleta-web config user.name  "michaelgonzalezv"
+          git -C caleta-web config user.email "77208065+michaelgonzalezv@users.noreply.github.com"
+
+      - name: republish from existing DB
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          ALERT_FROM: ${{ secrets.ALERT_FROM }}
+          ALERT_TO: ${{ secrets.ALERT_TO }}
+          FAVS_API: ${{ secrets.FAVS_API }}
+          FAVS_KEY: ${{ secrets.FAVS_KEY }}
+        run: python -m daftwatch republish --config config.ci.yaml --db data/daft.db

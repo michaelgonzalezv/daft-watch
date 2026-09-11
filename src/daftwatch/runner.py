@@ -35,6 +35,87 @@ class CycleResult:
     publish_ok: bool | None = None
 
 
+def export_and_publish(
+    config: Config,
+    store: Store,
+    logger: logging.Logger,
+    fx_fetcher: Callable[[list[str]], dict[str, float]] | None = None,
+) -> bool | None:
+    """Read whatever is already in *store* and (re)compute + publish every
+    dashboard export: listings.json, events.json, history.json, compare.json.
+    Touches no adapter and does no scraping — DB read + numpy/JSON work only,
+    sub-second even at ~1300 listings. This is the fast path: rerun after a
+    change to export.py/regression.py/the frontend without waiting on a
+    fresh, rate-limited scrape. A request for a field the DB doesn't have yet
+    still needs a real ``run``/``loop`` cycle first — this only republishes
+    what scraping has already put in the DB.
+
+    None when publishing is not configured; True/False otherwise (mirrors
+    ``CycleResult.publish_ok``).
+    """
+    if config.publish is None:
+        return None
+    try:
+        now = datetime.now(timezone.utc)
+        # daft's rentalPrice_to URL param filters on the NATIVE (often
+        # weekly) price, so price-ineligible listings come back. Apply the
+        # monthly max_price / keyword cut to the JSON too — but NOT
+        # max_sharing_with: the dashboard has its own adjustable house-size
+        # control and wants every price-eligible listing.
+        export_listings = filters.apply(
+            store.export_listings(config.export_gone_within_days),
+            {k: v for k, v in config.filters.items() if k != "max_sharing_with"},
+        )
+        # not a bound default (`= fetch_rates_usd`): resolving the bare
+        # name here, at call time, off this module's globals lets tests
+        # monkeypatch daftwatch.runner.fetch_rates_usd once instead of
+        # threading a fake through every publish-exercising call site.
+        fx_usd = (fx_fetcher or fetch_rates_usd)(
+            sorted({l.currency for l in export_listings})
+        )
+        wrote = export.write_json(
+            config.publish.json_path, export_listings, now.isoformat(),
+            fx_usd=fx_usd,
+        )
+
+        rels = [config.publish.file_rel]
+        if config.publish.events_path and config.publish.events_rel:
+            history = store.events_history(config.events_history_days)
+            if export.write_events_json(
+                config.publish.events_path, history, now.isoformat()
+            ):
+                wrote = True
+            rels.append(config.publish.events_rel)
+
+        if config.publish.history_path and config.publish.history_rel:
+            store.snapshot_prices(now.date().isoformat())
+            rows = store.price_history_rows(config.price_history_days)
+            if export.write_history_json(
+                config.publish.history_path, rows, now.isoformat()
+            ):
+                wrote = True
+            rels.append(config.publish.history_rel)
+
+        if config.publish.compare_path and config.publish.compare_rel:
+            comparison = compute_comparison(export_listings, fx_usd)
+            if export.write_compare_json(config.publish.compare_path, comparison):
+                wrote = True
+            rels.append(config.publish.compare_rel)
+
+        if not wrote:
+            # nothing changed on disk -> no commit needed, not a failure
+            return True
+        return export.git_publish(
+            config.publish.repo_dir,
+            rels,
+            f"data: rentals listings {now:%Y-%m-%d %H:%M}",
+            config.publish.git_push,
+        )
+    except Exception:
+        logger.exception("export/publish failed")
+        return False
+
+
 def run_cycle(
     config: Config,
     store: Store,
@@ -135,67 +216,7 @@ def run_cycle(
         store.apply_detail(lid, parse_fn(detail))
 
     # 3. export listings.json (+ events.json) and commit them (publish only)
-    if config.publish is not None:
-        try:
-            now = datetime.now(timezone.utc)
-            # daft's rentalPrice_to URL param filters on the NATIVE (often
-            # weekly) price, so price-ineligible listings come back. Apply the
-            # monthly max_price / keyword cut to the JSON too — but NOT
-            # max_sharing_with: the dashboard has its own adjustable house-size
-            # control and wants every price-eligible listing.
-            export_listings = filters.apply(
-                store.export_listings(config.export_gone_within_days),
-                {k: v for k, v in config.filters.items() if k != "max_sharing_with"},
-            )
-            # not a bound default (`= fetch_rates_usd`): resolving the bare
-            # name here, at call time, off this module's globals lets tests
-            # monkeypatch daftwatch.runner.fetch_rates_usd once instead of
-            # threading a fake through every publish-exercising call site.
-            fx_usd = (fx_fetcher or fetch_rates_usd)(
-                sorted({l.currency for l in export_listings})
-            )
-            wrote = export.write_json(
-                config.publish.json_path, export_listings, now.isoformat(),
-                fx_usd=fx_usd,
-            )
-
-            rels = [config.publish.file_rel]
-            if config.publish.events_path and config.publish.events_rel:
-                history = store.events_history(config.events_history_days)
-                if export.write_events_json(
-                    config.publish.events_path, history, now.isoformat()
-                ):
-                    wrote = True
-                rels.append(config.publish.events_rel)
-
-            if config.publish.history_path and config.publish.history_rel:
-                store.snapshot_prices(now.date().isoformat())
-                rows = store.price_history_rows(config.price_history_days)
-                if export.write_history_json(
-                    config.publish.history_path, rows, now.isoformat()
-                ):
-                    wrote = True
-                rels.append(config.publish.history_rel)
-
-            if config.publish.compare_path and config.publish.compare_rel:
-                comparison = compute_comparison(export_listings, fx_usd)
-                if export.write_compare_json(config.publish.compare_path, comparison):
-                    wrote = True
-                rels.append(config.publish.compare_rel)
-
-            if not wrote:
-                # nothing changed on disk -> no commit needed, not a failure
-                result.publish_ok = True
-            else:
-                result.publish_ok = export.git_publish(
-                    config.publish.repo_dir,
-                    rels,
-                    f"data: rentals listings {now:%Y-%m-%d %H:%M}",
-                    config.publish.git_push,
-                )
-        except Exception:
-            logger.exception("export/publish failed")
-            result.publish_ok = False
+    result.publish_ok = export_and_publish(config, store, logger, fx_fetcher)
 
     # The email is deliberately narrower than the dashboard: on top of every
     # configured filter it also honours email.max_price (the dashboard shows

@@ -37,6 +37,28 @@ def test_run_subcommand_creates_db_and_exits_zero(tmp_path, monkeypatch):
     assert db.exists()
 
 
+def test_republish_never_touches_the_adapter(tmp_path, monkeypatch):
+    # the whole point of `republish`: no scrape, so the adapter must never
+    # be asked to fetch anything — a fetch here would mean the fast path
+    # silently fell back to a slow one.
+    cfg = write_cfg(tmp_path)
+    db = tmp_path / "data" / "daft.db"
+
+    import daftwatch.__main__ as m
+
+    class ExplodingAdapter:
+        def __init__(self, *a, **k):
+            pass
+
+        def fetch(self, search):
+            raise AssertionError("republish must not call adapter.fetch")
+    monkeypatch.setattr(m, "DaftListingsAdapter", ExplodingAdapter)
+
+    rc = main(["republish", "--config", str(cfg), "--db", str(db)], env=ENV)
+    assert rc == 0
+    assert db.exists()  # store.close() still created the (empty) DB file
+
+
 def test_missing_smtp_env_returns_nonzero(tmp_path):
     cfg = write_cfg(tmp_path)
     rc = main(["run", "--config", str(cfg), "--db", str(tmp_path / "d.db")],

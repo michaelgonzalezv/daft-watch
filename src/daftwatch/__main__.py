@@ -11,14 +11,14 @@ from daftwatch.adapter import DaftListingsAdapter, MultiSourceAdapter
 from daftwatch.config import SmtpConfig, load_config
 from daftwatch.kijiji_adapter import KijijiListingsAdapter
 from daftwatch.notify import EmailNotifier
-from daftwatch.runner import loop, run_cycle
+from daftwatch.runner import export_and_publish, loop, run_cycle
 from daftwatch.store import Store
 
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="daftwatch")
     sub = p.add_subparsers(dest="command", required=True)
-    for name in ("run", "loop"):
+    for name in ("run", "loop", "republish"):
         sp = sub.add_parser(name)
         sp.add_argument("--config", default="./config.yaml")
         sp.add_argument("--db", default="./data/daft.db")
@@ -71,6 +71,12 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
                 f"{len(result.searches_failed)} search(es) failed"
             )
             return 0
+        if args.command == "republish":
+            # fast path: no adapter call, no scrape — just re-export +
+            # publish whatever is already in the DB (see runner.export_and_publish)
+            ok = export_and_publish(config, store, logger)
+            print(f"republish done: publish_ok={ok}")
+            return 0 if ok is not False else 1
         loop(
             config, store, adapter, notifier, logger,
             heartbeat_path=args.heartbeat,

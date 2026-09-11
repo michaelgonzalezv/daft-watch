@@ -8,7 +8,7 @@ from daftwatch.adapter import AdapterError, SearchAdapter
 from daftwatch.config import Config, NotifyConfig, PublishConfig, Search
 from daftwatch.models import Listing
 from daftwatch.store import Store
-from daftwatch.runner import run_cycle
+from daftwatch.runner import export_and_publish, run_cycle
 import daftwatch.runner as runner_mod
 
 # Cork / Dublin city centres (mirror daftwatch.geo.CENTRES)
@@ -704,4 +704,49 @@ def test_loop_closes_adapter_each_iteration(tmp_path):
     loop(cfg([s]), store, adapter, CountingNotifier(), logging.getLogger("t"),
          sleeper=lambda x: None, clock=lambda: 0.0, max_cycles=2)
     assert adapter.closed == 2
+    store.close()
+
+
+# --- export_and_publish: the fast path, no adapter/scrape involved ---------
+
+def test_export_and_publish_republishes_from_an_already_synced_store(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    pub, repo = _pub(tmp_path)
+    # simulate a DB that a prior scrape already populated — no adapter, no
+    # run_cycle, this is exactly what a "republish" CLI invocation sees
+    store.begin_cycle()
+    store.sync("Cork sharing", [mkshare("d1", 700), mkshare("d2", 900)])
+    store.finish_cycle(gone_after_cycles=1)
+
+    ok = export_and_publish(cfg([], publish=pub), store, logging.getLogger("t"))
+
+    assert ok is True
+    data = json.loads((repo / "listings.json").read_text(encoding="utf-8"))
+    assert {l["id"] for l in data["listings"]} == {"d1", "d2"}
+    store.close()
+
+
+def test_export_and_publish_returns_none_when_publish_not_configured(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    ok = export_and_publish(cfg([], publish=None), store, logging.getLogger("t"))
+    assert ok is None
+    store.close()
+
+
+def test_export_and_publish_writes_compare_json_too(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    pub = PublishConfig(
+        json_path=str(repo / "listings.json"), repo_dir=str(repo),
+        file_rel="listings.json", git_push=False,
+        compare_path=str(repo / "compare.json"), compare_rel="compare.json",
+    )
+    store.sync("Cork sharing", [mkshare(f"d{i}", 800) for i in range(20)])
+    store.finish_cycle(gone_after_cycles=1)
+
+    ok = export_and_publish(cfg([], publish=pub), store, logging.getLogger("t"))
+
+    assert ok is True
+    assert (repo / "compare.json").exists()
     store.close()
