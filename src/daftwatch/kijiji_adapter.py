@@ -61,6 +61,52 @@ def _classify_property_type(title: str, description: str) -> str:
     return "Room"  # no signal either way — today's default, unchanged
 
 
+# Gender preference — same category, same "no structured field" problem, but
+# noisier text than house/apartment: a first pass matching any bare "male"/
+# "female" produced real false positives (a form asking the APPLICANT'S own
+# gender: "Name + male/female + age"; a description of the CURRENT roommates:
+# "kitchen shared with other males", which isn't necessarily a request for
+# more of the same). Two tiers instead of one bare-word match:
+#   - "only" phrasing (either word order: "female only" / "only for female")
+#     is an unambiguous restriction -> "<Gender> only"
+#   - a preference verb (looking for / seeking / prefer / want / need /
+#     suit(able) / ideal for) within 3 words of "male"/"female" is a genuine
+#     ask, not incidental mention -> "<Gender> preferred"
+# Measured against the same 46 real Toronto listings: 10/46 (22%) matched,
+# manually checked every match — no false positives in that pass (the two
+# false-positive patterns above no longer match either tier).
+_GENDER_ONLY_RE = {
+    "Female": re.compile(
+        r"\b(females?[\s-]*only|only\s+(?:is\s+)?(?:for\s+)?females?|"
+        r"women[\s-]*only|ladies[\s-]*only|no\s+males?)\b",
+        re.I,
+    ),
+    "Male": re.compile(
+        r"\b(males?[\s-]*only|only\s+(?:is\s+)?(?:for\s+)?males?|"
+        r"men[\s-]*only|no\s+females?)\b",
+        re.I,
+    ),
+}
+_PREF_VERB = r"(?:looking for|seeking|prefer(?:ably|red)?|suit(?:able)?|ideal for|want(?:ed)?|need(?:ed)?)"
+_GENDER_PREF_RE = {
+    "Female": re.compile(rf"\b{_PREF_VERB}\b(?:\s+\w+){{0,3}}\s+females?\b", re.I),
+    "Male": re.compile(rf"\b{_PREF_VERB}\b(?:\s+\w+){{0,3}}\s+males?\b", re.I),
+}
+
+
+def _classify_gender_pref(title: str, description: str) -> str | None:
+    text = f"{title or ''} {description or ''}"
+    only_hits = [g for g, rx in _GENDER_ONLY_RE.items() if rx.search(text)]
+    if len(only_hits) == 1:
+        return f"{only_hits[0]} only"
+    if only_hits:
+        return None  # both "only" patterns hit — contradictory, don't guess
+    pref_hits = [g for g, rx in _GENDER_PREF_RE.items() if rx.search(text)]
+    if len(pref_hits) == 1:
+        return f"{pref_hits[0]} preferred"
+    return None  # both, or neither — no clean signal
+
+
 def _fetch_html(url: str, timeout: float = 30.0) -> str:
     """Plain HTTP GET — kijiji.ca serves its full __NEXT_DATA__ page to a bare
     request, no headless browser needed (unlike daft.ie's Cloudflare gate)."""
@@ -115,17 +161,17 @@ def to_listing(entry: dict) -> Listing:
     loc = entry.get("location") or {}
     coords = loc.get("coordinates") or {}
     price = _price_native(entry)
+    title = entry.get("title") or ""
+    description = entry.get("description") or ""
     return Listing(
         id="kj" + str(entry.get("id", "")),
         category="sharing",
-        title=entry.get("title") or "",
+        title=title,
         url=entry.get("url") or "",
         price_eur=price,
         beds=None,
         baths=None,
-        property_type=_classify_property_type(
-            entry.get("title") or "", entry.get("description") or ""
-        ),
+        property_type=_classify_property_type(title, description),
         area=None,
         county=None,
         lat=coords.get("latitude"),
@@ -137,6 +183,7 @@ def to_listing(entry: dict) -> Listing:
         price_native=price,
         first_published=(entry.get("activationDate") or "")[:10] or None,
         room_type=None,
+        preferences=_classify_gender_pref(title, description),
         # city stays None here, same as daft's to_listing() — the runner
         # resolves it from the search name via geo.city_of() and persists it
         # through store.set_cities_and_distances().

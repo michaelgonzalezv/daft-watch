@@ -5,6 +5,7 @@ from daftwatch.adapter import AdapterError, RateLimited
 from daftwatch.config import Search
 from daftwatch.kijiji_adapter import (
     KijijiListingsAdapter,
+    _classify_gender_pref,
     _classify_property_type,
     _norm_phone_ca,
     parse_detail,
@@ -211,3 +212,35 @@ def test_to_listing_uses_classified_property_type():
 
     no_signal = dict(_ROOM, title="Room for rent")
     assert to_listing(no_signal).property_type == "Room"
+
+
+@pytest.mark.parametrize(
+    "title,description,expected",
+    [
+        # unambiguous restriction, either word order
+        ("Room for rent (Female Only)", "", "Female only"),
+        ("", "Quiet female-only room", "Female only"),
+        ("Basement room, only for female", "", "Female only"),
+        ("Men only apartment", "", "Male only"),
+        ("", "no females please", "Male only"),
+        # a genuine ask, not incidental mention
+        ("", "we are looking for a third female roommate", "Female preferred"),
+        ("Room for rent", "looking for a male tenant", "Male preferred"),
+        # real false positives caught while measuring against live listings —
+        # must NOT be classified as a preference
+        ("", "Send ALL answers) Name + male/female + age", None),  # asks the applicant's own gender
+        ("", "kitchen shared with other males", None),             # describes current roommates, not a request
+        ("Room for Japanese Students", "", None),                  # no gender mention at all
+        ("", "", None),
+    ],
+)
+def test_classify_gender_pref(title, description, expected):
+    assert _classify_gender_pref(title, description) == expected
+
+
+def test_to_listing_uses_classified_gender_pref():
+    female_only = dict(_ROOM, title="Room for rent (Female Only)")
+    assert to_listing(female_only).preferences == "Female only"
+
+    no_signal = dict(_ROOM, title="Room for rent", description="Nice quiet street, close to transit.")
+    assert to_listing(no_signal).preferences is None
