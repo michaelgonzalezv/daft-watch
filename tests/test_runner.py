@@ -9,10 +9,22 @@ from daftwatch.config import Config, NotifyConfig, PublishConfig, Search
 from daftwatch.models import Listing
 from daftwatch.store import Store
 from daftwatch.runner import run_cycle
+import daftwatch.runner as runner_mod
 
 # Cork / Dublin city centres (mirror daftwatch.geo.CENTRES)
 _CORK = (51.8979, -8.4706)
 _DUBLIN = (53.3473, -6.2591)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_fx_network_calls(monkeypatch):
+    # run_cycle resolves fetch_rates_usd off daftwatch.runner's globals at
+    # call time (not a bound default), specifically so this one patch covers
+    # every publish-exercising test below without threading a fake through
+    # each call site.
+    monkeypatch.setattr(
+        runner_mod, "fetch_rates_usd", lambda currencies: {c: 1.0 for c in currencies}
+    )
 
 
 def mk(id, price, title="Flat"):
@@ -363,6 +375,34 @@ def test_non_eur_listings_excluded_from_digest_entirely(tmp_path):
     data = json.loads((repo / "listings.json").read_text(encoding="utf-8"))
     assert {rec["id"] for rec in data["listings"]} == {"kj1"}  # still exported
     assert r.events_sent == 0                                  # but not emailed
+    store.close()
+
+
+def test_publish_embeds_fx_usd_for_every_currency_present(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    pub, repo = _pub(tmp_path)
+    eur_room = mkshare("d1", 700)
+    cad_room = Listing(
+        id="kj1", category="sharing", title="Room", url="https://kijiji.ca/1",
+        price_eur=800, beds=None, baths=None, property_type="Room",
+        area=None, county=None, lat=_DUBLIN[0], lng=_DUBLIN[1], raw={},
+        source="kijiji", currency="CAD", country="Canada", price_native=800,
+    )
+    s1 = Search(name="Cork sharing", category="sharing", params={})
+    s2 = Search(name="Toronto sharing", category="sharing", params={}, source="kijiji")
+    adapter = FakeAdapter({"Cork sharing": [eur_room], "Toronto sharing": [cad_room]})
+    seen = []
+
+    def fake_fx(currencies):
+        seen.append(sorted(currencies))
+        return {c: 42.0 for c in currencies}
+
+    run_cycle(cfg([s1, s2], publish=pub), store, adapter, RecordingNotifier(),
+              logging.getLogger("t"), fx_fetcher=fake_fx)
+
+    data = json.loads((repo / "listings.json").read_text(encoding="utf-8"))
+    assert data["fx_usd"] == {"CAD": 42.0, "EUR": 42.0}
+    assert seen == [["CAD", "EUR"]]  # only currencies actually present, sorted
     store.close()
 
 

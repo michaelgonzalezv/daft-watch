@@ -88,21 +88,30 @@ def _date_desc_key(iso: str | None) -> int:
         return 1
 
 
-def write_json(path: str, listings: list[Listing], generated_at: str) -> bool:
+def write_json(
+    path: str,
+    listings: list[Listing],
+    generated_at: str,
+    fx_usd: dict[str, float] | None = None,
+) -> bool:
     """Atomically write ``listings.json`` to *path*; return whether it wrote.
 
-    Content: ``{"generated_at", "count", "listings": [...]}`` where ``listings``
-    is sorted by ``price_eur`` ascending, then most-recent ``first_published``
-    first. Parent directories are created. The write goes to ``path + ".tmp"``
-    then ``os.replace`` swaps it into place, so a reader never sees a partial
-    file.
+    Content: ``{"generated_at", "count", "fx_usd", "listings": [...]}`` where
+    ``listings`` is sorted by ``price_eur`` ascending, then most-recent
+    ``first_published`` first, and ``fx_usd`` is ``{currency: USD value of one
+    unit}`` (e.g. ``{"EUR": 1.08, "CAD": 0.73}``) for the dashboard's
+    cross-currency comparison line — see ``fx.fetch_rates_usd``. Parent
+    directories are created. The write goes to ``path + ".tmp"`` then
+    ``os.replace`` swaps it into place, so a reader never sees a partial file.
 
     Skip-when-unchanged: if *path* already holds a file whose ``listings`` array
     is byte-for-byte the same records (same order) as this call would produce,
-    nothing is written and ``False`` is returned. ``generated_at`` and ``count``
-    are ignored in that comparison — only a real listing change rewrites the
-    file (and so triggers a downstream commit / redeploy). Returns ``True`` when
-    the file was written.
+    nothing is written and ``False`` is returned. ``generated_at``, ``count``
+    and ``fx_usd`` are ignored in that comparison — only a real listing change
+    rewrites the file (and so triggers a downstream commit / redeploy); in
+    practice every listing's ``last_seen`` changes each cycle anyway, so
+    ``fx_usd`` drifting on its own is not a real gap in freshness. Returns
+    ``True`` when the file was written.
     """
     ordered = sorted(
         listings, key=lambda l: (l.price_eur, _date_desc_key(l.first_published))
@@ -111,6 +120,7 @@ def write_json(path: str, listings: list[Listing], generated_at: str) -> bool:
     payload = {
         "generated_at": generated_at,
         "count": len(ordered),
+        "fx_usd": fx_usd or {},
         "listings": records,
     }
 

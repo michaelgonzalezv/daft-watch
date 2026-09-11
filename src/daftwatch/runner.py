@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ from daftwatch.adapter import (
 )
 from daftwatch.config import Config
 from daftwatch.export import _date_desc_key
+from daftwatch.fx import fetch_rates_usd
 from daftwatch.kijiji_adapter import parse_detail as parse_kijiji_detail
 from daftwatch.notify import EmailNotifier
 from daftwatch.store import Store
@@ -38,6 +40,7 @@ def run_cycle(
     adapter: SearchAdapter,
     notifier: EmailNotifier,
     logger: logging.Logger,
+    fx_fetcher: Callable[[list[str]], dict[str, float]] | None = None,
 ) -> CycleResult:
     result = CycleResult()
     store.begin_cycle()
@@ -143,8 +146,16 @@ def run_cycle(
                 store.export_listings(config.export_gone_within_days),
                 {k: v for k, v in config.filters.items() if k != "max_sharing_with"},
             )
+            # not a bound default (`= fetch_rates_usd`): resolving the bare
+            # name here, at call time, off this module's globals lets tests
+            # monkeypatch daftwatch.runner.fetch_rates_usd once instead of
+            # threading a fake through every publish-exercising call site.
+            fx_usd = (fx_fetcher or fetch_rates_usd)(
+                sorted({l.currency for l in export_listings})
+            )
             wrote = export.write_json(
-                config.publish.json_path, export_listings, now.isoformat()
+                config.publish.json_path, export_listings, now.isoformat(),
+                fx_usd=fx_usd,
             )
 
             rels = [config.publish.file_rel]
@@ -308,6 +319,7 @@ def loop(
     sleeper=time.sleep,
     clock=time.monotonic,
     max_cycles: int | None = None,
+    fx_fetcher: Callable[[list[str]], dict[str, float]] | None = None,
 ) -> None:
     last_alert: float | None = None
     last_publish_alert: float | None = None
@@ -316,7 +328,7 @@ def loop(
     while max_cycles is None or cycles < max_cycles:
         cycles += 1
         try:
-            result = run_cycle(config, store, adapter, notifier, logger)
+            result = run_cycle(config, store, adapter, notifier, logger, fx_fetcher)
             if result.adapter_broken:
                 now = clock()
                 if last_alert is None or now - last_alert >= _ALERT_THROTTLE_SECONDS:
