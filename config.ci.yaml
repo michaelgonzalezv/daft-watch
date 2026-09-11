@@ -111,6 +111,8 @@ publish:
   events_rel: "dashboards/rentals/events.json"
   history_path: "caleta-web/dashboards/rentals/history.json"
   history_rel: "dashboards/rentals/history.json"
+  compare_path: "caleta-web/dashboards/rentals/compare.json"
+  compare_rel: "dashboards/rentals/compare.json"
 
 email:
   max_price: 800

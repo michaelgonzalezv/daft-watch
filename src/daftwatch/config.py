@@ -35,6 +35,8 @@ class PublishConfig:
     events_rel: str | None = None       # its path inside repo_dir
     history_path: str | None = None     # where history.json is written
     history_rel: str | None = None      # its path inside repo_dir
+    compare_path: str | None = None     # where compare.json is written
+    compare_rel: str | None = None      # its path inside repo_dir
 
 
 @dataclass
@@ -134,6 +136,8 @@ def load_config(path: str | os.PathLike) -> Config:
             events_rel=publish_raw.get("events_rel"),
             history_path=publish_raw.get("history_path"),
             history_rel=publish_raw.get("history_rel"),
+            compare_path=publish_raw.get("compare_path"),
+            compare_rel=publish_raw.get("compare_rel"),
         )
 
     backup = None

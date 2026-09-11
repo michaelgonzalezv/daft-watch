@@ -20,6 +20,7 @@ from daftwatch.export import _date_desc_key
 from daftwatch.fx import fetch_rates_usd
 from daftwatch.kijiji_adapter import parse_detail as parse_kijiji_detail
 from daftwatch.notify import EmailNotifier
+from daftwatch.regression import compute_comparison
 from daftwatch.store import Store
 from daftwatch.watchlist import fetch_watchlist
 
@@ -175,6 +176,12 @@ def run_cycle(
                 ):
                     wrote = True
                 rels.append(config.publish.history_rel)
+
+            if config.publish.compare_path and config.publish.compare_rel:
+                comparison = compute_comparison(export_listings, fx_usd)
+                if export.write_compare_json(config.publish.compare_path, comparison):
+                    wrote = True
+                rels.append(config.publish.compare_rel)
 
             if not wrote:
                 # nothing changed on disk -> no commit needed, not a failure

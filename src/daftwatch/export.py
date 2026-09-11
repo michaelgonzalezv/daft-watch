@@ -189,6 +189,44 @@ def write_history_json(path: str, rows: list[dict], generated_at: str) -> bool:
     return True
 
 
+def write_compare_json(path: str, comparison: dict) -> bool:
+    """Write ``compare.json`` — the country-comparison regression output from
+    ``regression.compute_comparison()``, already dashboard-shaped (it carries
+    its own ``generated_at``). Same atomic write as :func:`write_json`;
+    skip-when-unchanged ignores only that ``generated_at`` key.
+    """
+    payload = dict(comparison)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                existing = json.load(fh)
+            existing_cmp = {k: v for k, v in existing.items() if k != "generated_at"}
+            new_cmp = json.loads(json.dumps(
+                {k: v for k, v in payload.items() if k != "generated_at"}, default=str
+            ))
+            if existing_cmp == new_cmp:
+                return False
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=1, ensure_ascii=False, default=str)
+            fh.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    return True
+
+
 def write_events_json(path: str, history: dict, generated_at: str) -> bool:
     """Write ``events.json`` (``{"generated_at", "events": {id: [...]}}``).
 

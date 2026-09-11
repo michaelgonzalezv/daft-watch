@@ -378,6 +378,38 @@ def test_non_eur_listings_excluded_from_digest_entirely(tmp_path):
     store.close()
 
 
+def test_publish_writes_compare_json_when_configured(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    pub = PublishConfig(
+        json_path=str(repo / "listings.json"), repo_dir=str(repo),
+        file_rel="listings.json", git_push=False,
+        compare_path=str(repo / "compare.json"), compare_rel="compare.json",
+    )
+    rooms = [mkshare(f"d{i}", 800) for i in range(20)]
+    s = Search(name="Cork sharing", category="sharing", params={})
+    adapter = FakeAdapter({"Cork sharing": rooms})
+    run_cycle(cfg([s], publish=pub), store, adapter, RecordingNotifier(),
+              logging.getLogger("t"))
+
+    data = json.loads((repo / "compare.json").read_text(encoding="utf-8"))
+    assert "generated_at" in data
+    assert "caveats" in data and len(data["caveats"]) > 0
+    store.close()
+
+
+def test_publish_skips_compare_json_when_not_configured(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    pub, repo = _pub(tmp_path)  # no compare_path/compare_rel
+    s = Search(name="Cork sharing", category="sharing", params={})
+    adapter = FakeAdapter({"Cork sharing": [mkshare("d1", 800)]})
+    run_cycle(cfg([s], publish=pub), store, adapter, RecordingNotifier(),
+              logging.getLogger("t"))
+    assert not (repo / "compare.json").exists()
+    store.close()
+
+
 def test_publish_embeds_fx_usd_for_every_currency_present(tmp_path):
     store = Store(str(tmp_path / "t.db"))
     pub, repo = _pub(tmp_path)
