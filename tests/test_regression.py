@@ -102,3 +102,32 @@ def test_no_city_fixed_effects_in_the_model():
     rows += [mk(f"b{i}", "Canada", "toronto", 700, "CAD") for i in range(20)]
     res = compute_comparison(rows, FX)
     assert not any(k.startswith("city:") for k in res["coefficients"])
+
+
+def test_property_type_by_country_fits_each_country_separately():
+    # Ireland: House costs noticeably more than Room. Canada: no real gap.
+    # A per-country fit should recover each pattern on its own, distinct from
+    # the pooled coefficients (which mix both countries together).
+    rows = [mk(f"ie_room{i}", "Ireland", "dublin", 800, "EUR", property_type="Room") for i in range(20)]
+    rows += [mk(f"ie_house{i}", "Ireland", "dublin", 1200, "EUR", property_type="House") for i in range(20)]
+    rows += [mk(f"ca_room{i}", "Canada", "toronto", 700, "CAD", property_type="Room") for i in range(20)]
+    rows += [mk(f"ca_house{i}", "Canada", "toronto", 700, "CAD", property_type="House") for i in range(20)]
+
+    res = compute_comparison(rows, FX)
+    by_country = res["property_type_by_country"]
+
+    ie_house_pct = by_country["Ireland"]["coefficients"]["property_type:House"]["pct_vs_reference"]
+    ca_house_pct = by_country["Canada"]["coefficients"]["property_type:House"]["pct_vs_reference"]
+    assert ie_house_pct > 40  # 1200 vs 800 -> +50%, roughly
+    assert -1 < ca_house_pct < 1  # 700 vs 700 -> no gap
+    assert by_country["Ireland"]["n"] == 40
+    assert by_country["Canada"]["n"] == 40
+
+
+def test_property_type_by_country_omits_a_too_thin_country():
+    rows = [mk(f"ie{i}", "Ireland", "dublin", 800, "EUR", property_type="Room") for i in range(15)]
+    rows += [mk(f"ie2_{i}", "Ireland", "dublin", 1200, "EUR", property_type="House") for i in range(15)]
+    rows += [mk(f"ca{i}", "Canada", "toronto", 700, "CAD") for i in range(5)]  # under the n>=30 floor
+    res = compute_comparison(rows, FX)
+    assert "Ireland" in res["property_type_by_country"]
+    assert "Canada" not in res["property_type_by_country"]

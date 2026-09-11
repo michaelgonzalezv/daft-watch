@@ -54,6 +54,35 @@ def _one_hot(values: list[str], reference: str) -> tuple[list[str], list[np.ndar
     return other_levels, columns
 
 
+def _fit_property_type_only(rows: list[tuple[Listing, float, float]]) -> dict | None:
+    """log(price_usd) ~ property_type + distance_centre_km on a single-country
+    subset — no country dummy needed, there's only one country in *rows*.
+    Used for the Ireland-only / Canada-only toggle in the dashboard; the
+    pooled (both countries) version comes from the main fit in
+    ``compute_comparison``, which additionally controls for country. None if
+    the subset is too thin to fit, or only one property_type shows up in it
+    (nothing to compare against the reference)."""
+    if len(rows) < 30:
+        return None
+    ptypes = [l.property_type for l, _, _ in rows]
+    dists = np.array([d for _, _, d in rows])
+    y = np.log(np.array([p for _, p, _ in rows]))
+    ptype_levels, ptype_cols = _one_hot(ptypes, _REF_PROPERTY_TYPE)
+    if not ptype_cols:
+        return None
+    feature_names = ["intercept"] + [f"property_type:{lvl}" for lvl in ptype_levels] + ["distance_centre_km"]
+    X = np.column_stack([np.ones(len(rows)), *ptype_cols, dists])
+    beta, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+    coefficients = {}
+    for name, b in zip(feature_names, beta):
+        if name.startswith("property_type:"):
+            coefficients[name] = {
+                "beta": round(float(b), 5),
+                "pct_vs_reference": round((math.exp(float(b)) - 1) * 100, 1),
+            }
+    return {"n": len(rows), "coefficients": coefficients}
+
+
 def compute_comparison(listings: list[Listing], fx_usd: dict[str, float]) -> dict:
     """log(price_usd) ~ country + property_type + distance_centre_km, fit by
     plain OLS (numpy.linalg.lstsq — no external stats dependency). Returns a
@@ -118,6 +147,17 @@ def compute_comparison(listings: list[Listing], fx_usd: dict[str, float]) -> dic
     for c in countries:
         sample_by_country[c] = sample_by_country.get(c, 0) + 1
 
+    # Ireland-only / Canada-only property_type effects, for the dashboard's
+    # pooled-vs-per-country toggle — see _fit_property_type_only.
+    rows_by_country: dict[str, list] = {}
+    for r in rows:
+        rows_by_country.setdefault(r[0].country, []).append(r)
+    property_type_by_country = {}
+    for country, sub in rows_by_country.items():
+        fit = _fit_property_type_only(sub)
+        if fit:
+            property_type_by_country[country] = fit
+
     by_city: dict[str, list[float]] = {}
     city_country: dict[str, str] = {}
     for l, price_usd, _ in rows:
@@ -138,6 +178,7 @@ def compute_comparison(listings: list[Listing], fx_usd: dict[str, float]) -> dic
         "r_squared": r_squared,
         "reference": {"country": _REF_COUNTRY, "property_type": _REF_PROPERTY_TYPE},
         "coefficients": coefficients,
+        "property_type_by_country": property_type_by_country,
         "sample_by_country": sample_by_country,
         "median_price_usd_by_city": median_by_city,
     })
