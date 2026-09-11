@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS listings (
     detail_fetched INTEGER NOT NULL DEFAULT 0,
     previous_price INTEGER,
     agent_phone TEXT,
-    agent_name TEXT
+    agent_name TEXT,
+    country TEXT DEFAULT 'Ireland'
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,10 +71,10 @@ CREATE TABLE IF NOT EXISTS price_history (
     p75 INTEGER,
     PRIMARY KEY (date, city, category)
 );
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;
 """
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 # Columns added to an existing older DB by ``_migrate``. Keep in sync with the
 # ``CREATE TABLE listings`` block above. Any column missing from an existing
@@ -101,6 +102,7 @@ _ADDED_COLUMNS = [
     ("previous_price", "INTEGER"),
     ("agent_phone", "TEXT"),
     ("agent_name", "TEXT"),
+    ("country", "TEXT DEFAULT 'Ireland'"),
 ]
 
 
@@ -167,6 +169,7 @@ def _row_to_listing(row: sqlite3.Row) -> Listing:
         raw={},
         source=row["source"] or "daft",
         currency=row["currency"] or "EUR",
+        country=row["country"] or "Ireland",
         price_native=row["price_native"] or 0,
         price_weekly=row["price_weekly"],
         first_published=row["first_published"],
@@ -237,9 +240,9 @@ class Store:
                     "source, currency, price_native, price_weekly, first_published, "
                     "last_updated, sharing_with, rooms_available, preferences, "
                     "owner_occupied, available_from, bathroom_type, description, "
-                    "room_type, city, detail_json, detail_fetched) "
+                    "room_type, city, detail_json, detail_fetched, country) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0,"
-                    "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (l.id, l.category, l.title, l.url, l.price_eur, l.beds, l.baths,
                      l.property_type, l.area, l.county, l.lat, l.lng,
                      json.dumps(l.raw, default=str), now, now,
@@ -247,7 +250,8 @@ class Store:
                      l.first_published, l.last_updated, l.sharing_with,
                      l.rooms_available, l.preferences, _bit(l.owner_occupied),
                      l.available_from, l.bathroom_type, l.description,
-                     l.room_type, l.city, detail_json, int(bool(l.detail_fetched))),
+                     l.room_type, l.city, detail_json, int(bool(l.detail_fetched)),
+                     l.country),
                 )
                 events.append(self._record_event(l.id, "NEW", None, l.price_eur))
                 continue
@@ -268,11 +272,11 @@ class Store:
                 "property_type=?, area=?, county=?, lat=?, lng=?, raw_json=?, "
                 "last_seen=?, active=1, missing_cycles=0, "
                 "source=?, currency=?, price_native=?, price_weekly=?, "
-                "first_published=?, room_type=?, previous_price=? WHERE id=?",
+                "first_published=?, room_type=?, previous_price=?, country=? WHERE id=?",
                 (l.title, l.url, l.price_eur, l.beds, l.baths, l.property_type,
                  l.area, l.county, l.lat, l.lng, json.dumps(l.raw, default=str),
                  now, l.source, l.currency, l.price_native, l.price_weekly,
-                 l.first_published, l.room_type, previous_price, l.id),
+                 l.first_published, l.room_type, previous_price, l.country, l.id),
             )
             if not was_active:
                 events.append(self._record_event(l.id, "BACK", old_price, l.price_eur))

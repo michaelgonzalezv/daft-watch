@@ -36,6 +36,7 @@ NEW_COLS = {
     "last_updated", "sharing_with", "rooms_available", "preferences",
     "owner_occupied", "available_from", "bathroom_type", "description",
     "room_type", "city", "detail_json", "detail_fetched", "previous_price",
+    "country",
 }
 
 V1_SCHEMA = """
@@ -67,11 +68,11 @@ def store(tmp_path):
 
 
 def test_schema_stamps_user_version(store):
-    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
 def test_fresh_db_is_v2_with_new_columns(store):
-    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 6
     assert NEW_COLS <= _cols(store)
 
 
@@ -89,7 +90,7 @@ def test_v1_db_migrates_preserving_rows(tmp_path):
 
     s = Store(p)
     try:
-        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 6
         assert NEW_COLS <= _cols(s)
         row = s._db.execute("SELECT * FROM listings WHERE id='old1'").fetchone()
         assert row["price_eur"] == 950
@@ -110,10 +111,32 @@ def test_migration_idempotent_on_reopen(tmp_path):
     Store(p).close()
     s = Store(p)
     try:
-        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 6
         assert NEW_COLS <= _cols(s)
     finally:
         s.close()
+
+
+def test_country_round_trips_through_sync_and_update(store):
+    # country defaults to "Ireland" on the Listing dataclass, so a listing
+    # from another source must have its own country persisted and read back
+    # — not silently fall through to that default via a missing DB column.
+    ca = Listing(
+        id="kj1", category="sharing", title="Room", url="https://kijiji.ca/1",
+        price_eur=800, beds=None, baths=None, property_type="Room",
+        area=None, county=None, lat=43.6, lng=-79.4, raw={},
+        source="kijiji", currency="CAD", country="Canada", price_native=800,
+    )
+    store.sync("Toronto sharing", [ca])
+    assert store.get_listing("kj1").country == "Canada"
+
+    # re-sync (the UPDATE path, not INSERT) must keep persisting it too
+    store.sync("Toronto sharing", [ca])
+    assert store.get_listing("kj1").country == "Canada"
+
+    ie = mk(id="ie1")
+    store.sync("Dublin sharing", [ie])
+    assert store.get_listing("ie1").country == "Ireland"
 
 
 def test_needs_detail_price_cap_and_limit(store):

@@ -341,6 +341,31 @@ def test_email_max_price_narrows_digest_not_export(tmp_path):
     store.close()
 
 
+def test_non_eur_listings_excluded_from_digest_entirely(tmp_path):
+    # Regression: the first real cycle with Kijiji's 19 Canadian regions sent
+    # a single ~700-row digest because every new CAD listing was "NEW" and
+    # nothing capped it (email_max_price is authored in EUR — comparing it
+    # against CAD would have been wrong the other way). Non-EUR listings must
+    # not reach the digest until they have their own configured threshold.
+    store = Store(str(tmp_path / "t.db"))
+    pub, repo = _pub(tmp_path)
+    cad_room = Listing(
+        id="kj1", category="sharing", title="Room", url="https://kijiji.ca/1",
+        price_eur=800, beds=None, baths=None, property_type="Room",
+        area=None, county=None, lat=_DUBLIN[0], lng=_DUBLIN[1], raw={},
+        source="kijiji", currency="CAD", country="Canada", price_native=800,
+    )
+    s = Search(name="Toronto sharing", category="sharing", params={}, source="kijiji")
+    adapter = FakeAdapter({"Toronto sharing": [cad_room]})
+    notifier = RecordingNotifier()
+    r = run_cycle(cfg([s], publish=pub), store, adapter, notifier, logging.getLogger("t"))
+
+    data = json.loads((repo / "listings.json").read_text(encoding="utf-8"))
+    assert {rec["id"] for rec in data["listings"]} == {"kj1"}  # still exported
+    assert r.events_sent == 0                                  # but not emailed
+    store.close()
+
+
 def test_digest_distance_filtered_but_still_exported(tmp_path):
     store = Store(str(tmp_path / "t.db"))
     pub, repo = _pub(tmp_path)

@@ -183,17 +183,18 @@ def run_cycle(
     # configured filter it also honours email.max_price (the dashboard shows
     # every price; the digest stays focused on affordable rooms). That cap is
     # authored in EUR, so comparing it against a listing in another currency
-    # (e.g. Kijiji's CAD) would silently be wrong — apply it only to EUR
-    # listings; every other currency still gets the non-price filters, just
-    # not yet a price cap of its own.
+    # (e.g. Kijiji's CAD) would silently be wrong. Rather than let non-EUR
+    # listings through uncapped — which is exactly what flooded a single
+    # digest with ~700 rows the first time Kijiji's 19 regions were added,
+    # since every one of them was "NEW" on that first sync — every currency
+    # but EUR is excluded from the digest entirely until it has its own
+    # configured threshold. GONE events are unaffected (they bypass this set
+    # below regardless of source).
     email_filters = dict(config.filters)
     if config.email_max_price is not None:
         email_filters["max_price"] = config.email_max_price
     eur_fetched = [l for l in fetched if l.currency == "EUR"]
-    other_fetched = [l for l in fetched if l.currency != "EUR"]
-    other_filters = {k: v for k, v in email_filters.items() if k != "max_price"}
     allowed_ids = {l.id for l in filters.apply(eur_fetched, email_filters)}
-    allowed_ids |= {l.id for l in filters.apply(other_fetched, other_filters)}
     min_types = set(config.notify.min_event_types)
 
     to_send: list[tuple] = []
