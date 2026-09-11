@@ -50,8 +50,19 @@ def test_fetch_falls_back_on_malformed_response(monkeypatch):
     assert fetch_rates_usd(["EUR"]) == {"EUR": DEFAULT_RATES_USD["EUR"]}
 
 
-def test_unknown_currency_falls_back_to_one(monkeypatch):
+def test_unknown_currency_is_omitted_not_defaulted_to_parity(monkeypatch):
+    # A currency with no configured fallback used to come back as 1.0, i.e.
+    # "at parity with the dollar" — a silently wrong number that would publish
+    # 800 GBP as $800. Leaving it out is handled everywhere downstream
+    # (compute_comparison drops the rows, the dashboard skips the ≈$ line).
     def fail(*a, **k):
         raise urllib.error.URLError("no network")
     monkeypatch.setattr("urllib.request.urlopen", fail)
-    assert fetch_rates_usd(["XYZ"]) == {"XYZ": 1.0}
+    assert fetch_rates_usd(["XYZ"]) == {}
+
+
+def test_a_known_currency_still_falls_back_when_another_is_omitted(monkeypatch):
+    def fail(*a, **k):
+        raise urllib.error.URLError("no network")
+    monkeypatch.setattr("urllib.request.urlopen", fail)
+    assert fetch_rates_usd(["EUR", "XYZ"]) == {"EUR": DEFAULT_RATES_USD["EUR"]}

@@ -96,7 +96,10 @@ def write_json(
 ) -> bool:
     """Atomically write ``listings.json`` to *path*; return whether it wrote.
 
-    Content: ``{"generated_at", "count", "fx_usd", "listings": [...]}`` where
+    Content: ``{"generated_at", "scraped_at", "count", "fx_usd",
+    "listings": [...]}`` where ``scraped_at`` is the newest ``last_seen``
+    across the exported listings (the real data freshness, which is not the
+    same as ``generated_at`` once ``daftwatch republish`` exists) and
     ``listings`` is sorted by ``price_eur`` ascending, then most-recent
     ``first_published`` first, and ``fx_usd`` is ``{currency: USD value of one
     unit}`` (e.g. ``{"EUR": 1.08, "CAD": 0.73}``) for the dashboard's
@@ -117,8 +120,16 @@ def write_json(
         listings, key=lambda l: (l.price_eur, _date_desc_key(l.first_published))
     )
     records = [to_record(l) for l in ordered]
+    # generated_at is when this FILE was built; scraped_at is when a scrape
+    # last actually confirmed a listing. They used to be the same instant
+    # because exporting only ever happened at the end of a scrape cycle —
+    # `daftwatch republish` breaks that (it re-exports from the existing DB
+    # without scraping), so a dashboard showing generated_at as "updated"
+    # would claim a freshness the data does not have.
+    seen = [l.last_seen for l in ordered if l.last_seen]
     payload = {
         "generated_at": generated_at,
+        "scraped_at": max(seen) if seen else None,
         "count": len(ordered),
         "fx_usd": fx_usd or {},
         "listings": records,

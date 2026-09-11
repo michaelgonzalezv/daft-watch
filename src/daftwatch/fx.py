@@ -22,6 +22,12 @@ def fetch_rates_usd(
     every call — a couple of tiny requests per scrape cycle is nowhere near
     worth caching. Best-effort per currency: one that fails to fetch falls
     back to ``DEFAULT_RATES_USD``; "USD" itself is always 1.0, no request.
+
+    A currency that fails AND has no fallback rate is left OUT of the returned
+    dict rather than defaulted to 1.0 — parity with the dollar is a silently
+    wrong number (800 GBP published as $800), while a missing key is already
+    handled downstream: ``regression.compute_comparison`` drops those rows and
+    the dashboard's ≈$ line skips them.
     """
     out: dict[str, float] = {}
     for cur in currencies:
@@ -36,8 +42,16 @@ def fetch_rates_usd(
                 data = json.loads(resp.read().decode("utf-8"))
             out[cur] = float(data["rates"]["USD"])
         except Exception:
+            fallback = DEFAULT_RATES_USD.get(cur)
+            if fallback is None:
+                _log.error(
+                    "fx rate fetch failed for %s and no fallback rate is "
+                    "configured; omitting it (listings in %s get no USD "
+                    "figure this cycle)", cur, cur, exc_info=True
+                )
+                continue
             _log.warning(
                 "fx rate fetch failed for %s; using fallback", cur, exc_info=True
             )
-            out[cur] = DEFAULT_RATES_USD.get(cur, 1.0)
+            out[cur] = fallback
     return out

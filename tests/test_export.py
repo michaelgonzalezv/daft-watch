@@ -98,6 +98,28 @@ def test_write_json_valid_and_count(tmp_path):
     assert p.read_text(encoding="utf-8").endswith("\n")
 
 
+def test_write_json_scraped_at_is_the_newest_last_seen_not_the_export_time(tmp_path):
+    # `daftwatch republish` re-exports without scraping, so generated_at (when
+    # the file was built) can be arbitrarily newer than the data. scraped_at
+    # is what the dashboard must show as "updated".
+    p = tmp_path / "listings.json"
+    ls = [
+        mk("1", last_seen="2026-09-11T17:37:01+00:00"),
+        mk("2", last_seen="2026-09-11T16:49:15+00:00"),
+    ]
+    write_json(str(p), ls, "2026-09-11T18:03:24+00:00")
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["generated_at"] == "2026-09-11T18:03:24+00:00"
+    assert data["scraped_at"] == "2026-09-11T17:37:01+00:00"
+
+
+def test_write_json_scraped_at_is_none_when_nothing_has_a_last_seen(tmp_path):
+    p = tmp_path / "listings.json"
+    write_json(str(p), [mk("1")], "2026-09-11T18:03:24+00:00")
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["scraped_at"] is None
+
+
 def test_write_json_skips_when_listings_unchanged(tmp_path):
     p = tmp_path / "listings.json"
     ls = [mk("1", price_eur=700), mk("2", price_eur=800)]

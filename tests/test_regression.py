@@ -124,6 +124,41 @@ def test_property_type_by_country_fits_each_country_separately():
     assert by_country["Canada"]["n"] == 40
 
 
+def test_per_country_fit_reports_the_reference_it_actually_used():
+    # The real shape of the data: Ireland has NO "Room" listing at all (daft's
+    # property_type is Apartment / House / Private Rental Sector), so its fit
+    # cannot be referenced to Room and silently falls back to the first level
+    # alphabetically. The fit has to say so — the dashboard prints "vs <ref>",
+    # and printing "vs Room" over Apartment-referenced numbers is a wrong
+    # number, not a wrong word.
+    rows = [mk(f"ie_apt{i}", "Ireland", "dublin", 1000, "EUR", property_type="Apartment") for i in range(20)]
+    rows += [mk(f"ie_house{i}", "Ireland", "dublin", 1200, "EUR", property_type="House") for i in range(20)]
+    rows += [mk(f"ca_room{i}", "Canada", "toronto", 700, "CAD", property_type="Room") for i in range(20)]
+    rows += [mk(f"ca_house{i}", "Canada", "toronto", 900, "CAD", property_type="House") for i in range(20)]
+
+    res = compute_comparison(rows, FX)
+    by_country = res["property_type_by_country"]
+
+    assert by_country["Ireland"]["reference"] == "Apartment"  # no Room in Ireland
+    assert by_country["Canada"]["reference"] == "Room"
+    # and the percentages really are against that reference: 1200 vs 1000
+    ie = by_country["Ireland"]["coefficients"]["property_type:House"]["pct_vs_reference"]
+    assert 15 < ie < 25  # ~+20% vs Apartment
+    # the reference level itself never gets a column
+    assert "property_type:Apartment" not in by_country["Ireland"]["coefficients"]
+    assert "property_type:Room" not in by_country["Canada"]["coefficients"]
+
+
+def test_pooled_reference_reports_the_level_actually_used_not_the_constant():
+    # Nothing here is a "Room", so the pooled fit falls back to Apartment and
+    # must report that rather than the requested _REF_PROPERTY_TYPE.
+    rows = [mk(f"a{i}", "Ireland", "dublin", 1000, "EUR", property_type="Apartment") for i in range(20)]
+    rows += [mk(f"b{i}", "Canada", "toronto", 700, "CAD", property_type="House") for i in range(20)]
+    res = compute_comparison(rows, FX)
+    assert res["reference"]["property_type"] == "Apartment"
+    assert res["reference"]["country"] == "Ireland"
+
+
 def test_property_type_by_country_omits_a_too_thin_country():
     rows = [mk(f"ie{i}", "Ireland", "dublin", 800, "EUR", property_type="Room") for i in range(15)]
     rows += [mk(f"ie2_{i}", "Ireland", "dublin", 1200, "EUR", property_type="House") for i in range(15)]

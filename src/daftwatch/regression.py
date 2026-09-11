@@ -33,6 +33,12 @@ _CAVEATS = [
     "property_type is a text guess for Canada (~59% coverage; the rest "
     "fall into the same reference bucket as an unclassified listing), not "
     "the structured field Ireland has.",
+    "The property_type percentages are against a reference type that can "
+    "differ per fit: the pooled model uses Room, but Ireland has no Room "
+    "listing at all (daft types are Apartment / House / Private Rental "
+    "Sector), so the Ireland-only fit is referenced to Apartment. Each table "
+    "names the reference it actually used — they are not comparable across "
+    "tabs without accounting for that.",
     "City is not a control in this model — every city belongs to exactly "
     "one country, so a country effect and a full set of city effects can't "
     "be separated statistically. See median_price_usd_by_city for city-level "
@@ -43,15 +49,25 @@ _CAVEATS = [
 ]
 
 
-def _one_hot(values: list[str], reference: str) -> tuple[list[str], list[np.ndarray]]:
-    """Dummy columns for every level except *reference* (or the first level
-    alphabetically, if *reference* isn't actually present). Returns the
-    non-reference levels in the same order as the returned columns."""
+def _one_hot(
+    values: list[str], reference: str
+) -> tuple[str, list[str], list[np.ndarray]]:
+    """Dummy columns for every level except the reference. Returns
+    ``(reference_actually_used, non_reference_levels, columns)``, levels in the
+    same order as the columns.
+
+    *reference* is only a request: a subset that doesn't contain it (Ireland
+    has no "Room" listing at all — daft's property_type is Apartment / House /
+    Private Rental Sector) falls back to the first level alphabetically. The
+    caller MUST report the returned reference rather than assume the requested
+    one — every coefficient is "% vs that level", so labelling an
+    Apartment-referenced fit as "vs Room" is a wrong number, not a wrong word.
+    """
     levels = sorted(set(values))
     ref = reference if reference in levels else levels[0]
     other_levels = [lvl for lvl in levels if lvl != ref]
     columns = [np.array([1.0 if v == lvl else 0.0 for v in values]) for lvl in other_levels]
-    return other_levels, columns
+    return ref, other_levels, columns
 
 
 def _fit_property_type_only(rows: list[tuple[Listing, float, float]]) -> dict | None:
@@ -61,13 +77,18 @@ def _fit_property_type_only(rows: list[tuple[Listing, float, float]]) -> dict | 
     pooled (both countries) version comes from the main fit in
     ``compute_comparison``, which additionally controls for country. None if
     the subset is too thin to fit, or only one property_type shows up in it
-    (nothing to compare against the reference)."""
+    (nothing to compare against the reference).
+
+    The returned ``reference`` is the level the percentages are actually
+    against, which is NOT always ``_REF_PROPERTY_TYPE``: Ireland has no "Room"
+    listing, so its fit is referenced to "Apartment". Callers must show it.
+    """
     if len(rows) < 30:
         return None
     ptypes = [l.property_type for l, _, _ in rows]
     dists = np.array([d for _, _, d in rows])
     y = np.log(np.array([p for _, p, _ in rows]))
-    ptype_levels, ptype_cols = _one_hot(ptypes, _REF_PROPERTY_TYPE)
+    ptype_ref, ptype_levels, ptype_cols = _one_hot(ptypes, _REF_PROPERTY_TYPE)
     if not ptype_cols:
         return None
     feature_names = ["intercept"] + [f"property_type:{lvl}" for lvl in ptype_levels] + ["distance_centre_km"]
@@ -80,7 +101,7 @@ def _fit_property_type_only(rows: list[tuple[Listing, float, float]]) -> dict | 
                 "beta": round(float(b), 5),
                 "pct_vs_reference": round((math.exp(float(b)) - 1) * 100, 1),
             }
-    return {"n": len(rows), "coefficients": coefficients}
+    return {"n": len(rows), "reference": ptype_ref, "coefficients": coefficients}
 
 
 def compute_comparison(listings: list[Listing], fx_usd: dict[str, float]) -> dict:
@@ -121,8 +142,8 @@ def compute_comparison(listings: list[Listing], fx_usd: dict[str, float]) -> dic
     prices_usd = [p for _, p, _ in rows]
     y = np.log(np.array(prices_usd))
 
-    country_levels, country_cols = _one_hot(countries, _REF_COUNTRY)
-    ptype_levels, ptype_cols = _one_hot(ptypes, _REF_PROPERTY_TYPE)
+    country_ref, country_levels, country_cols = _one_hot(countries, _REF_COUNTRY)
+    ptype_ref, ptype_levels, ptype_cols = _one_hot(ptypes, _REF_PROPERTY_TYPE)
 
     feature_names = ["intercept"] + [f"country:{lvl}" for lvl in country_levels] + \
         [f"property_type:{lvl}" for lvl in ptype_levels] + ["distance_centre_km"]
@@ -176,7 +197,9 @@ def compute_comparison(listings: list[Listing], fx_usd: dict[str, float]) -> dic
 
     result.update({
         "r_squared": r_squared,
-        "reference": {"country": _REF_COUNTRY, "property_type": _REF_PROPERTY_TYPE},
+        # the levels this fit is ACTUALLY referenced to, not the requested
+        # constants — see _one_hot on why those can differ.
+        "reference": {"country": country_ref, "property_type": ptype_ref},
         "coefficients": coefficients,
         "property_type_by_country": property_type_by_country,
         "sample_by_country": sample_by_country,

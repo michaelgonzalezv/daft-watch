@@ -75,8 +75,14 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
             # fast path: no adapter call, no scrape — just re-export +
             # publish whatever is already in the DB (see runner.export_and_publish)
             ok = export_and_publish(config, store, logger)
+            if ok is None:
+                # nothing to republish TO — a config with no publish: block is
+                # a mistake for this command, not a no-op success.
+                print("no publish: block in the config; nothing to republish",
+                      file=sys.stderr)
+                return 2
             print(f"republish done: publish_ok={ok}")
-            return 0 if ok is not False else 1
+            return 0 if ok else 1
         loop(
             config, store, adapter, notifier, logger,
             heartbeat_path=args.heartbeat,
