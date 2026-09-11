@@ -95,6 +95,33 @@ def test_median_price_usd_by_city_min_max_span_varying_prices():
     assert stats["median_usd"] == round(900 * 1.1)
 
 
+def test_median_price_usd_by_city_also_reports_native_currency_figures():
+    # a EUR price against Ireland's EUR/hr minimum wage (or CAD against
+    # Canada's) needs no fx at all — these must be the untouched native
+    # prices, not the USD figures divided back through fx_usd.
+    rows = [mk(f"a{i}", "Ireland", "dublin", 1000, "EUR") for i in range(20)]
+    rows += [mk(f"b{i}", "Canada", "toronto", 700, "CAD") for i in range(20)]
+    res = compute_comparison(rows, FX)
+    dublin = res["median_price_usd_by_city"]["dublin"]
+    toronto = res["median_price_usd_by_city"]["toronto"]
+    assert dublin["median_native"] == 1000
+    assert dublin["min_native"] == 1000
+    assert dublin["max_native"] == 1000
+    assert dublin["currency"] == "EUR"
+    assert toronto["median_native"] == 700
+    assert toronto["currency"] == "CAD"
+
+
+def test_median_price_usd_by_city_native_min_max_span_varying_prices():
+    prices = [600, 900, 1200] * 10
+    rows = [mk(f"a{i}", "Ireland", "dublin", p, "EUR") for i, p in enumerate(prices)]
+    res = compute_comparison(rows, FX)
+    stats = res["median_price_usd_by_city"]["dublin"]
+    assert stats["min_native"] == 600
+    assert stats["max_native"] == 1200
+    assert stats["median_native"] == 900
+
+
 def test_no_city_fixed_effects_in_the_model():
     # city is intentionally excluded — see the module docstring on why
     # (perfectly nested within country, not separately identifiable)

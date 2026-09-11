@@ -180,15 +180,27 @@ def compute_comparison(listings: list[Listing], fx_usd: dict[str, float]) -> dic
             property_type_by_country[country] = fit
 
     by_city: dict[str, list[float]] = {}
+    by_city_native: dict[str, list[float]] = {}
     city_country: dict[str, str] = {}
+    city_currency: dict[str, str] = {}
     for l, price_usd, _ in rows:
         by_city.setdefault(l.city, []).append(price_usd)
+        by_city_native.setdefault(l.city, []).append(l.price_native)
         city_country[l.city] = l.country  # every city belongs to exactly one country
+        city_currency[l.city] = l.currency  # ...and, in practice, one currency
     median_by_city = {
         city: {
             "median_usd": round(statistics.median(vals)),
             "min_usd": round(min(vals)),
             "max_usd": round(max(vals)),
+            # native-currency figures too — a EUR price against Ireland's
+            # EUR/hr minimum wage (or CAD against Canada's) needs no fx at
+            # all, so the dashboard's minimum-wage-weeks column uses these
+            # instead of round-tripping the USD figures back through fx_usd.
+            "median_native": round(statistics.median(by_city_native[city])),
+            "min_native": round(min(by_city_native[city])),
+            "max_native": round(max(by_city_native[city])),
+            "currency": city_currency[city],
             "n": len(vals),
             "country": city_country[city],
         }
