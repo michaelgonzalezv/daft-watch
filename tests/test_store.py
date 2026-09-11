@@ -1,4 +1,5 @@
 import sqlite3
+from dataclasses import replace
 
 import pytest
 from daftwatch.models import Listing
@@ -284,7 +285,7 @@ def test_sync_persists_new_scalar_fields(store):
 def test_sync_update_preserves_enrichment(store):
     store.begin_cycle()
     store.sync("s", [mk_share("x", 700)])
-    store.apply_detail("x", _detail_fields(sharing_with=3))
+    store.apply_detail("x", _detail_fields(sharing_with=3, preferences="Female"))
     store.set_distances("x", {"centre": 2.0})
     store.set_city("x", "dublin")
 
@@ -296,6 +297,30 @@ def test_sync_update_preserves_enrichment(store):
     assert got.distances_km == {"centre": 2.0}
     assert got.city == "dublin"
     assert got.price_eur == 690
+    # regression: a plain re-sync (no preferences of its own — true for every
+    # daft listing, which only ever gets preferences from apply_detail) must
+    # not blow away what apply_detail already set here.
+    assert got.preferences == "Female"
+
+
+def test_sync_update_refreshes_preferences_when_the_listing_carries_one(store):
+    # Kijiji's to_listing() derives preferences from title/description at
+    # search time, every cycle — unlike daft, a re-sync must actually apply
+    # a new value here, not just preserve whatever was already stored.
+    kijiji_room = Listing(
+        id="kj1", category="sharing", title="Room", url="https://kijiji.ca/1",
+        price_eur=800, beds=None, baths=None, property_type="Room",
+        area=None, county=None, lat=None, lng=None, raw={},
+        source="kijiji", currency="CAD", country="Canada", price_native=800,
+    )
+    store.begin_cycle()
+    store.sync("Toronto sharing", [kijiji_room])
+    assert store.get_listing("kj1").preferences is None
+
+    store.begin_cycle()
+    reclassified = replace(kijiji_room, price_eur=750, price_native=750, preferences="Female only")
+    store.sync("Toronto sharing", [reclassified])
+    assert store.get_listing("kj1").preferences == "Female only"
 
 
 def test_sync_records_previous_price_on_change(store):

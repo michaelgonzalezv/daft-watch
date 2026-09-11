@@ -274,17 +274,28 @@ class Store:
             # Only search-page-derived fields are refreshed here; detail columns
             # (sharing_with, ...), detail_json, detail_fetched and city are owned
             # by apply_detail / set_distances / set_city and must survive a
-            # re-sync.
+            # re-sync. preferences is the one exception: daft never sets it at
+            # this stage (only apply_detail does, from propertyOverview), but
+            # Kijiji's to_listing() derives it from title/description right
+            # here every cycle (no structured field to enrich later) — so an
+            # unconditional overwrite would have been fine for Kijiji and
+            # correct for daft too (always None from daft's to_listing), EXCEPT
+            # a plain re-sync of an EXISTING row is not a no-op: it would blow
+            # away whatever apply_detail had already set for a daft listing.
+            # COALESCE keeps a real incoming value (either source) and falls
+            # back to whatever's already stored when this cycle has nothing.
             self._db.execute(
                 "UPDATE listings SET title=?, url=?, price_eur=?, beds=?, baths=?, "
                 "property_type=?, area=?, county=?, lat=?, lng=?, raw_json=?, "
                 "last_seen=?, active=1, missing_cycles=0, "
                 "source=?, currency=?, price_native=?, price_weekly=?, "
-                "first_published=?, room_type=?, previous_price=?, country=? WHERE id=?",
+                "first_published=?, room_type=?, previous_price=?, country=?, "
+                "preferences=COALESCE(?, preferences) WHERE id=?",
                 (l.title, l.url, l.price_eur, l.beds, l.baths, l.property_type,
                  l.area, l.county, l.lat, l.lng, json.dumps(l.raw, default=str),
                  now, l.source, l.currency, l.price_native, l.price_weekly,
-                 l.first_published, l.room_type, previous_price, l.country, l.id),
+                 l.first_published, l.room_type, previous_price, l.country,
+                 l.preferences, l.id),
             )
             if not was_active:
                 events.append(self._record_event(l.id, "BACK", old_price, l.price_eur))
