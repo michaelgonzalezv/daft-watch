@@ -124,6 +124,15 @@ def test_fetch_filters_to_roommates_category_only():
     assert [l.id for l in listings] == ["kj1714658868"]
 
 
+def test_fetch_drops_parking_spots_in_the_category_not_just_their_price():
+    parking = dict(_ROOM, id="9999999", title="Parking spot for rent",
+                   url="https://www.kijiji.ca/v-room-rental-roommate/x/9999999")
+    html = _html(_apollo(_ROOM, parking))
+    a = KijijiListingsAdapter(fetch_html=lambda url: html, sleeper=lambda s: None)
+    listings = a.fetch(_search(location_id="1700273"))
+    assert [l.id for l in listings] == ["kj1714658868"]  # the parking entry never makes it into the list at all
+
+
 def test_fetch_requires_location_id():
     a = KijijiListingsAdapter(fetch_html=lambda url: "", sleeper=lambda s: None)
     with pytest.raises(AdapterError):
@@ -259,15 +268,22 @@ def test_to_listing_uses_classified_gender_pref():
         # usable price, not "no price"
         ("Great room, $140/week, all bills included", "", 140, "week"),
         ("", "rent is $130 per week", 130, "week"),
-        ("Room, Rooms for rent. Fully furnished, all is supplied. $35", "", 35, None),  # no period phrasing at all
+        # real cases: no "/word" slash, just "$X weekly rate" / French
+        ("", "Room is very clean, $185 weekly rate (includes all utilities)", 185, "week"),
+        ("", "159$/semaines tout inclus (excepté la literie)", 159, "week"),
+        # implausibly low with no period explanation at all — junk data, a
+        # WANTED post mis-filed as an offer, or just a wrong number; none of
+        # these are a real monthly price either, same bucket as a day rate
+        ("Room, Rooms for rent. Fully furnished, all is supplied. $35", "", 35, "unreliable"),
+        ("Need a room", "Looking for a room in or around Saskatoon to rent for 5 months", 1, "unreliable"),
+        ("Room for rent, cheap!", "", 50, "unreliable"),
         # price plausible as monthly -> don't reinterpret even with a day-rate mention
         ("High quality female's room", "short term rental $30-100/day, depending on the room", 700, None),
         # day/night phrasing but price already plausible as monthly
         ("Nightly cleaning included", "", 900, None),
-        # implausibly low price but no period signal — leave alone (this is
-        # what "contact for price" / a data error looks like, not something
-        # this heuristic should guess about)
-        ("Room for rent, cheap!", "", 50, None),
+        # $280 shared room, Edmonton, real listing, no period signal, but
+        # priced above the implausibility floor — left alone
+        ("Shared room for female in Millwoods", "utilities and internet included", 280, None),
     ],
 )
 def test_detect_rate_period(title, description, price, expected):
@@ -283,6 +299,14 @@ def test_to_listing_zeroes_price_for_a_day_rate():
     assert l.price_weekly is None
 
 
+def test_to_listing_zeroes_price_for_unreliable_junk():
+    junk = dict(_ROOM, title="For Rent...two signs",
+                description="$30.00 firm for both. Can provide stick(s)",
+                price={"amount": 3000})
+    l = to_listing(junk)
+    assert l.price_native == 0
+
+
 def test_to_listing_converts_a_week_rate_to_monthly():
     weekly = dict(_ROOM, title="Great room, $140/week, all bills included",
                   price={"amount": 14000})  # 140.00 CAD
@@ -290,3 +314,26 @@ def test_to_listing_converts_a_week_rate_to_monthly():
     assert l.price_weekly == 140
     assert l.price_native == round(140 * 52 / 12)
     assert l.price_eur == round(140 * 52 / 12)
+
+
+def test_to_listing_converts_french_week_rate():
+    weekly = dict(_ROOM, title="CHAMBRE À LOUER POUR TRAVAILLEUR AU CENTRE-VILLE DE QUÉBEC",
+                  description="159$/semaines tout inclus (excepté la literie) Minimum 5 semaines",
+                  price={"amount": 15900})  # 159.00 CAD
+    l = to_listing(weekly)
+    assert l.price_weekly == 159
+    assert l.price_native == round(159 * 52 / 12)
+
+
+def test_to_listing_drops_a_parking_spot_entirely():
+    parking = dict(_ROOM, title="Parking spot for rent",
+                   description="Underground Parking Space Available",
+                   price={"amount": 26000})
+    assert to_listing(parking) is None
+
+
+def test_to_listing_keeps_a_room_that_merely_mentions_parking():
+    room = dict(_ROOM, title="Cozy room, parking included",
+               description="Street parking available out front.")
+    l = to_listing(room)
+    assert l is not None

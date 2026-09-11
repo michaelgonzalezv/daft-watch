@@ -110,37 +110,48 @@ def _classify_gender_pref(title: str, description: str) -> str | None:
 # price.amount has no separate "per day/week/month" field on Kijiji (unlike
 # daft, whose price TEXT says "per week" and gets converted) — it's just
 # whatever number the poster typed into the price box. Found by hand, while
-# looking into why a few Canadian rooms were pricing at $30-50/mo (implausible
+# looking into why a few Canadian rooms were pricing at $30-250/mo (implausible
 # for a real month's rent anywhere in Canada): short-term listings where that
 # box held the WEEKLY, DAILY or NIGHTLY rate instead, e.g. a title reading
-# "$50/day or $300/week" with price_native == 50.
+# "$50/day or $300/week" with price_native == 50, or a description reading
+# "$185 weekly rate" / "159$/semaines" (Québec French — semaine(s), jour(s),
+# nuit(ée)) with price_native == 185 / 159.
 #
 # Not a blanket "day/night/week mentioned anywhere -> distrust the price": one
 # real listing priced at a plausible $700/mo also mentions "$30-100/day,
 # depending on the room" as a flexible short-stay option — that 700 is very
 # likely the real monthly figure, and reinterpreting it on the strength of an
-# incidental mention would be its own kind of wrong. Only flagged when the
-# price itself is implausibly low for a month's rent AND the text explicitly
-# reads as a day/night/week rate — both together, not either alone.
+# incidental mention would be its own kind of wrong. The period check below
+# only ever runs when the price itself is already implausibly low for a
+# month's rent.
 #
 # Week and day/night are NOT handled the same way. A weekly rate converts to
 # monthly exactly like daft's own "per week" listings already do (x 52/12) —
-# reliable, same trusted math. A daily/nightly rate does NOT: checked the two
-# real cases against what the SAME ad itself quotes as its own weekly rate,
-# and extrapolating daily x7 overstated it by 17% and 54% — short stays carry
-# a real premium over committing longer, so day/night rates are left with no
+# reliable, same trusted math. A daily/nightly rate does NOT: checked two real
+# cases against what the SAME ad itself quotes as its own weekly rate, and
+# extrapolating daily x7 overstated it by 17% and 54% — short stays carry a
+# real premium over committing longer, so day/night rates are left with no
 # monthly price at all rather than asserting a number the evidence says is
-# wrong.
-_WEEK_RATE_RE = re.compile(r"(\$?\d+\s*/\s*week\b)|(\bper\s+week\b)|(\bweekly\b)", re.I)
-_DAY_RATE_RE = re.compile(
-    r"(\$?\d+\s*/\s*(?:day|night)\b)|(\bnightly\b)|(\bper\s+(?:day|night)\b)", re.I
+# wrong. And a price this low with NO day/week explanation at all ("Need a
+# room" at $1, a pair of yard signs at $30) isn't a real monthly figure
+# either — it's junk data or a listing that isn't a room offer, not a bargain.
+_WEEK_RATE_RE = re.compile(
+    r"(\$?\d+\s*/\s*(?:week|semaines?)\b)|(\bper\s+week\b)|(\bweekly\b)|(\bsemaines?\b)",
+    re.I,
 )
-_IMPLAUSIBLE_MONTHLY_CAD = 150  # no real Canadian room rents for less per month
+_DAY_RATE_RE = re.compile(
+    r"(\$?\d+\s*/\s*(?:day|night|jours?|nuits?)\b)|(\bnightly\b)|(\bper\s+(?:day|night)\b)"
+    r"|(\bjourn[ée]e\b)|(\bnuit[ée]e\b)",
+    re.I,
+)
+_IMPLAUSIBLE_MONTHLY_CAD = 250  # no real Canadian room rents for less per month
 
 
 def _detect_rate_period(title: str, description: str, price_native: int) -> str | None:
-    """"week", "day" (covers nightly too), or None (price_native already
-    looks like a plausible monthly figure, or there's no period signal).
+    """"week", "day" (covers nightly too), "unreliable" (implausibly cheap for
+    a month with no period explanation at all — junk, a non-offer, or just a
+    wrong number), or None (price_native already looks like a plausible
+    monthly figure).
 
     Checks day/night BEFORE week on purpose: a listing that mentions both
     ("$50/day or $300/week") is offering a menu of short-stay options, and in
@@ -154,7 +165,21 @@ def _detect_rate_period(title: str, description: str, price_native: int) -> str 
         return "day"
     if _WEEK_RATE_RE.search(text):
         return "week"
-    return None
+    return "unreliable"
+
+
+# Kijiji's category enforcement is loose enough that things that are not a
+# room at all end up filed under "Room Rentals & Roommates" — found a
+# literal parking spot ("Parking spot for rent", $260) sitting in the data
+# next to real rooms. Title-only, on purpose: "parking" shows up incidentally
+# in plenty of genuine room ads ("street parking available", "no parking") —
+# only a title that IS about parking, not a room that happens to mention it,
+# should drop the whole listing rather than just its price.
+_NON_HOUSING_TITLE_RE = re.compile(r"^\s*parking\s+(?:spot|space)\b", re.I)
+
+
+def _is_non_housing(title: str) -> bool:
+    return bool(_NON_HOUSING_TITLE_RE.search(title or ""))
 
 
 def _fetch_html(url: str, timeout: float = 30.0) -> str:
@@ -203,15 +228,19 @@ def _norm_phone_ca(raw: Any) -> str | None:
     return None
 
 
-def to_listing(entry: dict) -> Listing:
+def to_listing(entry: dict) -> Listing | None:
     """Map one Kijiji Apollo-cache entity (``StandardListing`` or
     ``RealEstateListing``, "Room Rentals & Roommates" category) to our
-    Listing. Every key is treated as optional so schema drift degrades
-    fields rather than crashing — same policy as ``adapter.to_listing``."""
+    Listing, or ``None`` when it isn't actually a room (see
+    ``_is_non_housing``) — the caller drops those. Every key is treated as
+    optional so schema drift degrades fields rather than crashing — same
+    policy as ``adapter.to_listing``."""
+    title = entry.get("title") or ""
+    if _is_non_housing(title):
+        return None
     loc = entry.get("location") or {}
     coords = loc.get("coordinates") or {}
     price = _price_native(entry)
-    title = entry.get("title") or ""
     description = entry.get("description") or ""
     price_weekly = None
     period = _detect_rate_period(title, description, price)
@@ -219,7 +248,7 @@ def to_listing(entry: dict) -> Listing:
         # same conversion daft already trusts for its own "per week" listings
         price_weekly = price
         price = round(price_weekly * 52 / 12)
-    elif period == "day":
+    elif period in ("day", "unreliable"):
         price = 0  # same "no reliable monthly price" bucket as CONTACT listings
     return Listing(
         id="kj" + str(entry.get("id", "")),
@@ -336,7 +365,7 @@ class KijijiListingsAdapter(SearchAdapter):
 
         html = self._with_backoff(f"search {search.name}", _get)
         entries = self._entries(html)
-        return [to_listing(e) for e in entries]
+        return [l for e in entries if (l := to_listing(e)) is not None]
 
     def detail(self, url: str) -> dict | None:
         eid = _entity_id_from_url(url)
