@@ -126,6 +126,8 @@ def compute_comparison(listings: list[Listing], fx_usd: dict[str, float]) -> dic
     median_by_city = {
         city: {
             "median_usd": round(statistics.median(vals)),
+            "min_usd": round(min(vals)),
+            "max_usd": round(max(vals)),
             "n": len(vals),
             "country": city_country[city],
         }

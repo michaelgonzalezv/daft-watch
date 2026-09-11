@@ -78,9 +78,21 @@ def test_median_price_usd_by_city_is_plain_descriptive_stats():
     city_stats = res["median_price_usd_by_city"]
     assert city_stats["dublin"]["n"] == 20
     assert city_stats["dublin"]["median_usd"] == round(1000 * 1.1)
+    assert city_stats["dublin"]["min_usd"] == round(1000 * 1.1)
+    assert city_stats["dublin"]["max_usd"] == round(1000 * 1.1)
     assert city_stats["dublin"]["country"] == "Ireland"
     assert city_stats["toronto"]["median_usd"] == round(700 * 0.7)
     assert city_stats["toronto"]["country"] == "Canada"
+
+
+def test_median_price_usd_by_city_min_max_span_varying_prices():
+    prices = [600, 900, 1200] * 10  # 30 rows total — at the n>=30 floor
+    rows = [mk(f"a{i}", "Ireland", "dublin", p, "EUR") for i, p in enumerate(prices)]
+    res = compute_comparison(rows, FX)
+    stats = res["median_price_usd_by_city"]["dublin"]
+    assert stats["min_usd"] == round(600 * 1.1)
+    assert stats["max_usd"] == round(1200 * 1.1)
+    assert stats["median_usd"] == round(900 * 1.1)
 
 
 def test_no_city_fixed_effects_in_the_model():
