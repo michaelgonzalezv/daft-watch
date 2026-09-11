@@ -78,7 +78,9 @@ def test_median_price_usd_by_city_is_plain_descriptive_stats():
     city_stats = res["median_price_usd_by_city"]
     assert city_stats["dublin"]["n"] == 20
     assert city_stats["dublin"]["median_usd"] == round(1000 * 1.1)
+    assert city_stats["dublin"]["country"] == "Ireland"
     assert city_stats["toronto"]["median_usd"] == round(700 * 0.7)
+    assert city_stats["toronto"]["country"] == "Canada"
 
 
 def test_no_city_fixed_effects_in_the_model():

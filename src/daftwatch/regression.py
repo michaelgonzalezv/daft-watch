@@ -119,10 +119,16 @@ def compute_comparison(listings: list[Listing], fx_usd: dict[str, float]) -> dic
         sample_by_country[c] = sample_by_country.get(c, 0) + 1
 
     by_city: dict[str, list[float]] = {}
+    city_country: dict[str, str] = {}
     for l, price_usd, _ in rows:
         by_city.setdefault(l.city, []).append(price_usd)
+        city_country[l.city] = l.country  # every city belongs to exactly one country
     median_by_city = {
-        city: {"median_usd": round(statistics.median(vals)), "n": len(vals)}
+        city: {
+            "median_usd": round(statistics.median(vals)),
+            "n": len(vals),
+            "country": city_country[city],
+        }
         for city, vals in sorted(by_city.items(), key=lambda kv: -len(kv[1]))
     }
 
