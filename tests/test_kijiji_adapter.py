@@ -1,0 +1,179 @@
+import json
+
+import pytest
+from daftwatch.adapter import AdapterError, RateLimited
+from daftwatch.config import Search
+from daftwatch.kijiji_adapter import (
+    KijijiListingsAdapter,
+    _norm_phone_ca,
+    parse_detail,
+    to_listing,
+)
+
+# Trimmed, hand-built shapes matching what a real fetch of
+# kijiji.ca/b-room-rental-roommate/canada/c36l<id> returns (verified by hand
+# against the live site while building this adapter): search results and
+# detail pages both embed a __NEXT_DATA__ Apollo cache, keyed "Type:id".
+
+_ROOM = {
+    "__typename": "StandardListing",
+    "id": "1714658868",
+    "title": "High Park Female Furnished Private Room",
+    "description": "FEMALE PRIVATE FURNISHED BEDROOM in female-only residence.",
+    "categoryId": 36,
+    "url": "https://www.kijiji.ca/v-room-rental-roommate/city-of-toronto/high-park/1714658868",
+    "activationDate": "2025-04-08T05:04:00.000Z",
+    "sortingDate": "2026-07-27T08:20:57.000Z",
+    "location": {
+        "name": "Toronto",
+        "address": "Toronto, ON M6P 3K9",
+        "coordinates": {"latitude": 43.65317, "longitude": -79.4681},
+    },
+    "price": {"type": "FIXED", "amount": 70000, "originalAmount": None},
+    "posterInfo": {"posterId": "77964287", "phoneNumber": None},
+}
+
+_OFF_TOPIC = {  # a promoted ad from an unrelated category, same page
+    "__typename": "StandardListing",
+    "id": "1726355545",
+    "title": "Dedicated Office for Rent",
+    "categoryId": 40,
+    "url": "https://www.kijiji.ca/v-commercial-office-space/x/1726355545",
+    "location": {"name": "Vaughan", "coordinates": {"latitude": 43.8, "longitude": -79.5}},
+    "price": {"amount": 71700},
+}
+
+
+def _html(apollo: dict) -> str:
+    page = {"props": {"pageProps": {"__APOLLO_STATE__": apollo}}}
+    return f'<script id="__NEXT_DATA__" type="application/json">{json.dumps(page)}</script>'
+
+
+def _apollo(*entries: dict) -> dict:
+    return {f"StandardListing:{e['id']}": e for e in entries}
+
+
+def test_to_listing_maps_fields():
+    l = to_listing(_ROOM)
+    assert l.id == "kj1714658868"
+    assert l.source == "kijiji"
+    assert l.currency == "CAD"
+    assert l.country == "Canada"
+    assert l.category == "sharing"
+    assert l.property_type == "Room"
+    assert l.price_native == 700  # 70000 cents
+    assert l.price_eur == 700
+    assert l.url == _ROOM["url"]
+    assert l.lat == pytest.approx(43.65317)
+    assert l.lng == pytest.approx(-79.4681)
+    assert l.first_published == "2025-04-08"
+    assert l.city is None  # resolved later by geo.city_of(search.name)
+
+
+def test_to_listing_defensive_on_missing_fields():
+    l = to_listing({"id": "1"})
+    assert l.id == "kj1"
+    assert l.price_native == 0
+    assert l.lat is None and l.lng is None
+    assert l.title == ""
+    assert l.url == ""
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("4165551234", "+14165551234"),
+        ("14165551234", "+14165551234"),
+        ("(416) 555-1234", "+14165551234"),
+        ("+1 416 555 1234", "+14165551234"),
+        ("555-1234", None),          # too short
+        (None, None),
+        (12345, None),               # not a string
+    ],
+)
+def test_norm_phone_ca(raw, expected):
+    assert _norm_phone_ca(raw) == expected
+
+
+def test_parse_detail_extracts_phone_and_description():
+    entry = dict(_ROOM, posterInfo={"phoneNumber": "4165551234"})
+    d = parse_detail(entry)
+    assert d["description"] == _ROOM["description"]
+    assert d["last_updated"] == "2026-07-27"
+    assert d["agent_phone"] == "+14165551234"
+    assert d["agent_name"] is None
+    assert d["sharing_with"] is None  # not structured on kijiji, unlike daft
+
+
+def test_parse_detail_no_phone():
+    d = parse_detail(_ROOM)  # posterInfo.phoneNumber is None
+    assert d["agent_phone"] is None
+
+
+def _search(**params) -> Search:
+    return Search(name="Toronto sharing", category="sharing", params=params, source="kijiji")
+
+
+def test_fetch_filters_to_roommates_category_only():
+    html = _html(_apollo(_ROOM, _OFF_TOPIC))
+    a = KijijiListingsAdapter(fetch_html=lambda url: html, sleeper=lambda s: None)
+    listings = a.fetch(_search(location_id="1700273"))
+    assert [l.id for l in listings] == ["kj1714658868"]
+
+
+def test_fetch_requires_location_id():
+    a = KijijiListingsAdapter(fetch_html=lambda url: "", sleeper=lambda s: None)
+    with pytest.raises(AdapterError):
+        a.fetch(_search())
+
+
+def test_fetch_uses_location_id_in_url():
+    seen = {}
+
+    def fake_fetch(url):
+        seen["url"] = url
+        return _html(_apollo(_ROOM))
+
+    a = KijijiListingsAdapter(fetch_html=fake_fetch, sleeper=lambda s: None)
+    a.fetch(_search(location_id="1700199"))
+    assert "c36l1700199" in seen["url"]
+
+
+def test_fetch_retries_on_rate_limited_then_succeeds():
+    calls = {"n": 0}
+
+    def flaky(url):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RateLimited("cloudflare-ish block")
+        return _html(_apollo(_ROOM))
+
+    sleeps = []
+    a = KijijiListingsAdapter(fetch_html=flaky, sleeper=sleeps.append)
+    listings = a.fetch(_search(location_id="1700273"))
+    assert len(listings) == 1
+    assert calls["n"] == 3
+    assert len(sleeps) == 2  # slept between the two failed attempts
+
+
+def test_fetch_raises_adapter_error_after_exhausting_backoff():
+    def always_limited(url):
+        raise RateLimited("still blocked")
+
+    a = KijijiListingsAdapter(fetch_html=always_limited, sleeper=lambda s: None)
+    with pytest.raises(AdapterError):
+        a.fetch(_search(location_id="1700273"))
+
+
+def test_detail_returns_matching_entity():
+    html = _html(_apollo(_ROOM))
+    a = KijijiListingsAdapter(fetch_html=lambda url: html, sleeper=lambda s: None)
+    d = a.detail(_ROOM["url"])
+    assert d["id"] == "1714658868"
+
+
+def test_detail_returns_none_when_delisted():
+    html = _html(_apollo(_ROOM))  # detail page no longer has the requested id
+    a = KijijiListingsAdapter(fetch_html=lambda url: html, sleeper=lambda s: None)
+    d = a.detail("https://www.kijiji.ca/v-room-rental-roommate/x/9999999999")
+    assert d is None

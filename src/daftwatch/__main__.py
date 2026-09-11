@@ -7,8 +7,9 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
-from daftwatch.adapter import DaftListingsAdapter
+from daftwatch.adapter import DaftListingsAdapter, MultiSourceAdapter
 from daftwatch.config import SmtpConfig, load_config
+from daftwatch.kijiji_adapter import KijijiListingsAdapter
 from daftwatch.notify import EmailNotifier
 from daftwatch.runner import loop, run_cycle
 from daftwatch.store import Store
@@ -33,7 +34,10 @@ def build(args, env: Mapping[str, str]):
     db_path = Path(args.db)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     store = Store(str(db_path))
-    adapter = DaftListingsAdapter(rate_limit_seconds=config.rate_limit_seconds)
+    adapter = MultiSourceAdapter({
+        "daft": DaftListingsAdapter(rate_limit_seconds=config.rate_limit_seconds),
+        "kijiji": KijijiListingsAdapter(rate_limit_seconds=config.rate_limit_seconds),
+    })
     notifier = EmailNotifier(smtp)
     logger = logging.getLogger("daftwatch")
     return config, store, adapter, notifier, logger

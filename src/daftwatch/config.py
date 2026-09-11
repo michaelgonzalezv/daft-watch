@@ -15,6 +15,7 @@ class Search:
     name: str
     category: str
     params: dict
+    source: str = "daft"
 
 
 @dataclass
@@ -99,7 +100,12 @@ def load_config(path: str | os.PathLike) -> Config:
                 f"must be one of {sorted(VALID_CATEGORIES)}"
             )
         searches.append(
-            Search(name=raw["name"], category=category, params=raw.get("params", {}))
+            Search(
+                name=raw["name"],
+                category=category,
+                params=raw.get("params", {}),
+                source=raw.get("source", "daft"),
+            )
         )
 
     notify_raw = data.get("notify", {}) or {}

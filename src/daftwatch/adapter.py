@@ -192,6 +192,51 @@ class SearchAdapter(abc.ABC):
         ...
 
 
+class MultiSourceAdapter(SearchAdapter):
+    """Fans a single ``adapter`` slot (the shape ``run_cycle``/``loop`` take)
+    out to one real adapter per ``Search.source``, so adding a source never
+    touches the runner's signature or the many tests built around a lone
+    ``FakeAdapter``.
+
+    ``fetch`` has the ``Search`` object and dispatches on ``search.source``
+    directly. ``detail(path)`` does not — the runner always calls it with
+    either a path relative to daft's own base (see ``_DAFT_BASE`` stripping
+    in ``runner.run_cycle``) or, for every other source, the listing's full
+    URL untouched (it doesn't start with ``_DAFT_BASE`` so that stripping is
+    a no-op) — so a leading "/" reliably means "daft's path shape" and
+    anything else routes to the (currently sole) non-daft adapter.
+    """
+
+    def __init__(self, adapters: dict[str, "SearchAdapter"]):
+        self._adapters = adapters
+
+    def fetch(self, search: Search) -> list[Listing]:
+        adapter = self._adapters.get(search.source)
+        if adapter is None:
+            raise AdapterError(f"no adapter registered for source {search.source!r}")
+        return adapter.fetch(search)
+
+    def detail(self, path: str) -> dict | None:
+        if path.startswith("/"):
+            target = self._adapters.get("daft")
+        else:
+            target = next(
+                (a for name, a in self._adapters.items() if name != "daft"), None
+            )
+        if target is None:
+            raise AdapterError(f"no adapter can handle detail path {path!r}")
+        detail_fn = getattr(target, "detail", None)
+        if detail_fn is None:
+            return None
+        return detail_fn(path)
+
+    def close(self) -> None:
+        for a in self._adapters.values():
+            close = getattr(a, "close", None)
+            if callable(close):
+                close()
+
+
 def _extract_next_data(html: str) -> dict:
     """Pull the parsed ``__NEXT_DATA__`` JSON out of a daft.ie search page.
 

@@ -16,6 +16,10 @@ def test_load_config_parses_searches_and_notify(tmp_path):
           - name: "Sharing"
             category: sharing
             params: { location: [dublin-8-dublin] }
+          - name: "Toronto sharing"
+            category: sharing
+            source: kijiji
+            params: { location_id: "1700273" }
         filters:
           keywords_exclude: [student]
         notify:
@@ -24,9 +28,12 @@ def test_load_config_parses_searches_and_notify(tmp_path):
     cfg = load_config(p)
     assert cfg.interval_minutes == 15
     assert cfg.gone_after_cycles == 3
-    assert [s.name for s in cfg.searches] == ["Dublin rent", "Sharing"]
+    assert [s.name for s in cfg.searches] == ["Dublin rent", "Sharing", "Toronto sharing"]
     assert cfg.searches[0].category == "rent"
     assert cfg.searches[0].params["max_price"] == 2200
+    assert cfg.searches[0].source == "daft"  # default, unset in the YAML
+    assert cfg.searches[2].source == "kijiji"
+    assert cfg.searches[2].params["location_id"] == "1700273"
     assert cfg.filters["keywords_exclude"] == ["student"]
     assert cfg.notify.min_event_types == ["NEW", "PRICE_DROP"]
 

@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from daftwatch.adapter import (
     AdapterError,
+    MultiSourceAdapter,
     RateLimited,
     SearchAdapter,
     _build_url,
@@ -12,6 +13,7 @@ from daftwatch.adapter import (
     parse_detail,
     to_listing,
 )
+from daftwatch.config import Search
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -488,3 +490,65 @@ def test_adapter_detail_live():
         parse_detail(detail)  # does not raise
     finally:
         a.close()
+
+
+class _FakeSourceAdapter(SearchAdapter):
+    def __init__(self, listings=None, detail_result="sentinel"):
+        self._listings = listings or []
+        self._detail_result = detail_result
+        self.detail_calls = []
+        self.closed = False
+
+    def fetch(self, search):
+        return self._listings
+
+    def detail(self, path):
+        self.detail_calls.append(path)
+        return self._detail_result
+
+    def close(self):
+        self.closed = True
+
+
+def test_multi_source_adapter_dispatches_fetch_by_search_source():
+    daft = _FakeSourceAdapter(listings=["from-daft"])
+    kijiji = _FakeSourceAdapter(listings=["from-kijiji"])
+    multi = MultiSourceAdapter({"daft": daft, "kijiji": kijiji})
+
+    assert multi.fetch(Search(name="s", category="sharing", params={}, source="daft")) == ["from-daft"]
+    assert multi.fetch(Search(name="s", category="sharing", params={}, source="kijiji")) == ["from-kijiji"]
+
+
+def test_multi_source_adapter_fetch_unknown_source_raises():
+    multi = MultiSourceAdapter({"daft": _FakeSourceAdapter()})
+    with pytest.raises(AdapterError):
+        multi.fetch(Search(name="s", category="sharing", params={}, source="nope"))
+
+
+def test_multi_source_adapter_detail_routes_relative_path_to_daft():
+    daft = _FakeSourceAdapter(detail_result={"who": "daft"})
+    kijiji = _FakeSourceAdapter(detail_result={"who": "kijiji"})
+    multi = MultiSourceAdapter({"daft": daft, "kijiji": kijiji})
+
+    assert multi.detail("/share/some-listing") == {"who": "daft"}
+    assert daft.detail_calls == ["/share/some-listing"]
+    assert kijiji.detail_calls == []
+
+
+def test_multi_source_adapter_detail_routes_full_url_to_non_daft():
+    daft = _FakeSourceAdapter(detail_result={"who": "daft"})
+    kijiji = _FakeSourceAdapter(detail_result={"who": "kijiji"})
+    multi = MultiSourceAdapter({"daft": daft, "kijiji": kijiji})
+
+    url = "https://www.kijiji.ca/v-room-rental-roommate/x/123"
+    assert multi.detail(url) == {"who": "kijiji"}
+    assert kijiji.detail_calls == [url]
+    assert daft.detail_calls == []
+
+
+def test_multi_source_adapter_close_closes_every_adapter():
+    daft = _FakeSourceAdapter()
+    kijiji = _FakeSourceAdapter()
+    multi = MultiSourceAdapter({"daft": daft, "kijiji": kijiji})
+    multi.close()
+    assert daft.closed and kijiji.closed

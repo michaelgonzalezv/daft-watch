@@ -16,6 +16,7 @@ from daftwatch.adapter import (
 )
 from daftwatch.config import Config
 from daftwatch.export import _date_desc_key
+from daftwatch.kijiji_adapter import parse_detail as parse_kijiji_detail
 from daftwatch.notify import EmailNotifier
 from daftwatch.store import Store
 from daftwatch.watchlist import fetch_watchlist
@@ -93,6 +94,10 @@ def run_cycle(
     for lid in store.needs_detail(config.detail_price_cap, config.detail_max_per_cycle):
         listing = store.get_listing(lid)
         url = (listing.url if listing else "") or ""
+        src = listing.source if listing else "daft"
+        # daft's detail() wants a path relative to its own base; every other
+        # source's detail() takes the listing's full URL, which this leaves
+        # untouched since it never starts with _DAFT_BASE.
         path = url[len(_DAFT_BASE):] if url.startswith(_DAFT_BASE) else url
         if not path:
             logger.warning("no url for listing %s; skipping detail fetch", lid)
@@ -122,7 +127,8 @@ def run_cycle(
             logger.info("listing %s has no detail page (delisted); skipping", lid)
             store.apply_detail(lid, {})
             continue
-        store.apply_detail(lid, parse_detail(detail))
+        parse_fn = parse_detail if src == "daft" else parse_kijiji_detail
+        store.apply_detail(lid, parse_fn(detail))
 
     # 3. export listings.json (+ events.json) and commit them (publish only)
     if config.publish is not None:
@@ -175,11 +181,19 @@ def run_cycle(
 
     # The email is deliberately narrower than the dashboard: on top of every
     # configured filter it also honours email.max_price (the dashboard shows
-    # every price; the digest stays focused on affordable rooms).
+    # every price; the digest stays focused on affordable rooms). That cap is
+    # authored in EUR, so comparing it against a listing in another currency
+    # (e.g. Kijiji's CAD) would silently be wrong — apply it only to EUR
+    # listings; every other currency still gets the non-price filters, just
+    # not yet a price cap of its own.
     email_filters = dict(config.filters)
     if config.email_max_price is not None:
         email_filters["max_price"] = config.email_max_price
-    allowed_ids = {l.id for l in filters.apply(fetched, email_filters)}
+    eur_fetched = [l for l in fetched if l.currency == "EUR"]
+    other_fetched = [l for l in fetched if l.currency != "EUR"]
+    other_filters = {k: v for k, v in email_filters.items() if k != "max_price"}
+    allowed_ids = {l.id for l in filters.apply(eur_fetched, email_filters)}
+    allowed_ids |= {l.id for l in filters.apply(other_fetched, other_filters)}
     min_types = set(config.notify.min_event_types)
 
     to_send: list[tuple] = []

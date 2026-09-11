@@ -18,6 +18,86 @@ searches:
     category: sharing
     params: { location: [dublin-city] }
 
+  # Canada (Kijiji "Room Rentals & Roommates", category id 36). location_id
+  # is Kijiji's own numeric region id — the URL's city slug is cosmetic, only
+  # this id and the category id route the search (verified by hand).
+  - name: "Toronto sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700273" }
+  - name: "Mississauga sharing"          # includes Brampton (Peel Region)
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700276" }
+  - name: "Montreal sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "80002" }
+  - name: "Ottawa sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700184" }
+  - name: "Calgary sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700199" }
+  - name: "Hamilton sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "80014" }
+  - name: "Kitchener sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700209" }
+  - name: "Edmonton sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700202" }
+  - name: "London sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700214" }
+  - name: "Vancouver sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "80003" }
+  - name: "Winnipeg sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700192" }
+  - name: "St. Catharines sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "80016" }
+  - name: "Halifax sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "80010" }
+  - name: "Quebec City sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700124" }
+  - name: "Saskatoon sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700197" }
+  - name: "Regina sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700194" }
+  - name: "Kelowna sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700228" }
+  - name: "Victoria sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700173" }
+  - name: "Windsor sharing"
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700220" }
+
 filters:
   max_sharing_with: 4
   keywords_exclude: []
