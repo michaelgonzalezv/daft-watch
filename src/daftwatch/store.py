@@ -502,17 +502,29 @@ class Store:
             for r in rows
         ]
 
-    def snapshot_prices(self, date_str: str) -> None:
-        """Record today's price distribution per (city, category) from the
-        active set. Idempotent for a given date — a re-run overwrites it.
+    def snapshot_prices(self, date_str: str, fx_usd: dict[str, float]) -> None:
+        """Record today's price distribution (USD) per (city, category) from
+        the active set. Idempotent for a given date — a re-run overwrites it.
+
+        Uses price_native/currency converted through *fx_usd*, not the
+        legacy price_eur column: for a Kijiji listing, price_eur actually
+        holds the raw CAD price unconverted (a holdover field name from
+        before Canada existed) — bucketing by it mixed CAD numbers into
+        what the dashboard's Market chart labelled as EUR. A row whose
+        currency isn't in fx_usd is skipped, same as compute_comparison.
         """
         rows = self._db.execute(
-            "SELECT city, category, price_eur FROM listings "
-            "WHERE active = 1 AND price_eur > 0 AND city IS NOT NULL"
+            "SELECT city, category, price_native, currency FROM listings "
+            "WHERE active = 1 AND price_native > 0 AND city IS NOT NULL"
         ).fetchall()
         buckets: dict[tuple[str, str], list[int]] = {}
         for r in rows:
-            buckets.setdefault((r["city"], r["category"]), []).append(r["price_eur"])
+            rate = fx_usd.get(r["currency"])
+            if rate is None:
+                continue
+            buckets.setdefault((r["city"], r["category"]), []).append(
+                round(r["price_native"] * rate)
+            )
         for (city, category), prices in buckets.items():
             prices.sort()
             n = len(prices)

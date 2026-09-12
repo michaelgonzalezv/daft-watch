@@ -1,6 +1,7 @@
 import json
 import logging
 import subprocess
+from dataclasses import replace
 
 import pytest
 
@@ -772,4 +773,32 @@ def test_export_and_publish_writes_compare_json_too(tmp_path):
 
     assert ok is True
     assert (repo / "compare.json").exists()
+    store.close()
+
+
+def test_export_and_publish_writes_history_json_in_usd(tmp_path):
+    # history.json's price_history snapshot must go through the same
+    # fx_usd export_and_publish already computes for listings.json/
+    # compare.json — not the legacy price_eur column, which for a
+    # non-EUR source holds its native price unconverted.
+    store = Store(str(tmp_path / "t.db"))
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    pub = PublishConfig(
+        json_path=str(repo / "listings.json"), repo_dir=str(repo),
+        file_rel="listings.json", git_push=False,
+        history_path=str(repo / "history.json"), history_rel="history.json",
+    )
+    # mkshare doesn't set price_native (it predates the multi-currency
+    # split) — snapshot_prices now reads price_native, not price_eur.
+    d1 = replace(mkshare("d1", 500), price_native=500)
+    store.sync("Cork sharing", [d1])
+    store.set_city("d1", "cork")
+    store.finish_cycle(gone_after_cycles=1)
+
+    export_and_publish(cfg([], publish=pub), store, logging.getLogger("t"))
+
+    data = json.loads((repo / "history.json").read_text(encoding="utf-8"))
+    assert len(data["history"]) == 1
+    assert data["history"][0]["median"] == 500  # fixture fx_usd is 1.0 for every currency
     store.close()

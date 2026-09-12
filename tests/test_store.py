@@ -394,7 +394,7 @@ def test_snapshot_prices_percentiles_and_idempotent(store):
     store.sync("s", ls)
     for l in ls:
         store.set_city(l.id, "cork")
-    store.snapshot_prices("2026-09-10")
+    store.snapshot_prices("2026-09-10", {"EUR": 1.0})
     rows = store.price_history_rows(days=400)
     assert len(rows) == 1
     r = rows[0]
@@ -402,8 +402,28 @@ def test_snapshot_prices_percentiles_and_idempotent(store):
     assert r["median"] == 600 and r["p25"] == 500 and r["p75"] == 700
 
     # re-run same day overwrites, does not duplicate
-    store.snapshot_prices("2026-09-10")
+    store.snapshot_prices("2026-09-10", {"EUR": 1.0})
     assert len(store.price_history_rows(days=400)) == 1
+
+
+def test_snapshot_prices_converts_through_fx_usd(store):
+    # price_native (EUR here) * fx_usd, NOT the legacy price_eur column —
+    # a Kijiji row's price_eur actually holds raw CAD, so bucketing by it
+    # would mislabel CAD numbers as EUR/USD.
+    store.begin_cycle()
+    store.sync("s", [mk_share("a", 500)])
+    store.set_city("a", "cork")
+    store.snapshot_prices("2026-09-10", {"EUR": 1.1})
+    r = store.price_history_rows(days=400)[0]
+    assert r["median"] == 550  # 500 * 1.1
+
+
+def test_snapshot_prices_skips_a_currency_missing_from_fx_usd(store):
+    store.begin_cycle()
+    store.sync("s", [mk_share("a", 500)])
+    store.set_city("a", "cork")
+    store.snapshot_prices("2026-09-10", {})  # no EUR rate available this cycle
+    assert store.price_history_rows(days=400) == []
 
 
 def test_dump_sql_roundtrips(store, tmp_path):

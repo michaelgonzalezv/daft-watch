@@ -102,7 +102,7 @@ def export_and_publish(
             rels.append(config.publish.events_rel)
 
         if config.publish.history_path and config.publish.history_rel:
-            store.snapshot_prices(now.date().isoformat())
+            store.snapshot_prices(now.date().isoformat(), fx_usd)
             rows = store.price_history_rows(config.price_history_days)
             if export.write_history_json(
                 config.publish.history_path, rows, now.isoformat()
