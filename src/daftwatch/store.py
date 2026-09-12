@@ -319,15 +319,24 @@ class Store:
         ).fetchall()
         return [_row_to_listing(r) for r in rows]
 
-    def export_listings(self, gone_within_days: int) -> list[Listing]:
+    def export_listings(
+        self, gone_within_days: int, keep_ids: frozenset[str] = frozenset()
+    ) -> list[Listing]:
         """Active listings, plus ones that went off-market within
-        *gone_within_days* (so the dashboard can keep watched rooms visible and
-        show when they were taken). Off-market rows carry ``status`` and
-        ``off_market_since``.
+        *gone_within_days*, plus any off-market listing whose id is in
+        *keep_ids* regardless of how long ago it went off-market — the
+        dashboard's ♥ favourites, which the caller looks up via
+        ``fetch_watchlist`` and which should never quietly vanish. Off-market
+        rows carry ``status`` and ``off_market_since``.
         """
         cutoff = (
             datetime.now(timezone.utc) - timedelta(days=gone_within_days)
         ).isoformat()
+        keep_clause = ""
+        params: list[str] = [cutoff]
+        if keep_ids:
+            keep_clause = f" OR l.id IN ({','.join('?' * len(keep_ids))})"
+            params.extend(keep_ids)
         rows = self._db.execute(
             "SELECT l.*, ("
             "  SELECT MAX(e.detected_at) FROM events e"
@@ -337,9 +346,9 @@ class Store:
             "WHERE l.active = 1 OR ("
             "  SELECT MAX(e.detected_at) FROM events e"
             "  WHERE e.listing_id = l.id AND e.type = 'GONE'"
-            ") >= ? "
+            ") >= ?" + keep_clause + " "
             "ORDER BY l.first_seen ASC, l.id ASC",
-            (cutoff,),
+            params,
         ).fetchall()
         out: list[Listing] = []
         for r in rows:

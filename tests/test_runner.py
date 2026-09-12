@@ -601,6 +601,29 @@ def test_json_export_is_price_filtered(tmp_path):
     store.close()
 
 
+def test_a_favourite_survives_max_price_and_keywords_exclude(tmp_path, monkeypatch):
+    # keep_ids exempts a favourite from the store's day cutoff, but
+    # export_and_publish still ran it through filters.apply() afterwards —
+    # a favourite whose last known price is above max_price, or whose title
+    # matches keywords_exclude, must not quietly disappear either.
+    monkeypatch.setattr("daftwatch.runner.fetch_watchlist", lambda a, k: {"fav"})
+    store = Store(str(tmp_path / "t.db"))
+    pub, repo = _pub(tmp_path)
+    s = Search(name="Cork sharing", category="sharing", params={})
+    fav = mkshare("fav", 1500, title="student room")  # over max_price AND excluded by keyword
+    plain = mkshare("plain", 1500, title="student room")
+    adapter = FakeAdapter({"Cork sharing": [fav, plain]})
+    run_cycle(
+        cfg([s], filters={"max_price": 800, "keywords_exclude": ["student"]}, publish=pub),
+        store, adapter, RecordingNotifier(), logging.getLogger("t"),
+    )
+
+    data = json.loads((repo / "listings.json").read_text(encoding="utf-8"))
+    ids = {rec["id"] for rec in data["listings"]}
+    assert ids == {"fav"}  # 'plain' correctly filtered out, 'fav' bypasses both filters
+    store.close()
+
+
 def test_json_export_keeps_all_house_sizes(tmp_path):
     store = Store(str(tmp_path / "t.db"))
     pub, repo = _pub(tmp_path)

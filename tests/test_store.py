@@ -360,6 +360,34 @@ def test_export_listings_includes_recently_gone(store):
     assert {l.id for l in store.export_listings(gone_within_days=-1)} == {"keep"}
 
 
+def test_export_listings_keep_ids_survive_past_the_cutoff(store):
+    # a ♥ favourite (keep_ids) must not disappear just because it's been
+    # off-market longer than gone_within_days — that's the whole point of
+    # favouriting something.
+    store.begin_cycle()
+    store.sync("s", [mk_share("fav", 700), mk_share("plain", 650)])
+    store.begin_cycle()
+    store.sync("s", [])
+    store.finish_cycle(gone_after_cycles=1)          # both go off-market
+
+    # cutoff in the past -> neither would normally still qualify
+    without_keep = {l.id for l in store.export_listings(gone_within_days=-1)}
+    assert without_keep == set()
+
+    with_keep = {
+        l.id for l in store.export_listings(gone_within_days=-1, keep_ids=frozenset({"fav"}))
+    }
+    assert with_keep == {"fav"}  # 'plain' still drops, 'fav' doesn't
+
+
+def test_export_listings_keep_ids_empty_is_a_no_op(store):
+    store.begin_cycle()
+    store.sync("s", [mk_share("x", 700)])
+    store.finish_cycle(gone_after_cycles=1)
+    # empty keep_ids must not blow up the SQL (empty IN (...) clause)
+    assert {l.id for l in store.export_listings(gone_within_days=30, keep_ids=frozenset())} == {"x"}
+
+
 def test_snapshot_prices_percentiles_and_idempotent(store):
     store.begin_cycle()
     ls = [mk_share(str(i), p) for i, p in enumerate([400, 500, 600, 700, 800])]

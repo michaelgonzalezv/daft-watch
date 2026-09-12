@@ -57,13 +57,27 @@ def export_and_publish(
         return None
     try:
         now = datetime.now(timezone.utc)
+        # ♥ favourites (the dashboard's Archive tab: off-market rooms you
+        # starred, kept forever instead of falling off after
+        # export_gone_within_days) must survive every filter below too, not
+        # just the day cutoff — an old favourite whose last known price
+        # happens to sit above max_price, or whose title trips
+        # keywords_exclude, would otherwise still quietly vanish. Filter
+        # everything else as normal, then add the favourites back
+        # unconditionally.
+        watched = fetch_watchlist(config.watchlist_api, config.watchlist_key)
+        raw_listings = store.export_listings(
+            config.export_gone_within_days, keep_ids=frozenset(watched)
+        )
+        kept = [l for l in raw_listings if l.id in watched]
+        rest = [l for l in raw_listings if l.id not in watched]
         # daft's rentalPrice_to URL param filters on the NATIVE (often
         # weekly) price, so price-ineligible listings come back. Apply the
         # monthly max_price / keyword cut to the JSON too — but NOT
         # max_sharing_with: the dashboard has its own adjustable house-size
         # control and wants every price-eligible listing.
-        export_listings = filters.apply(
-            store.export_listings(config.export_gone_within_days),
+        export_listings = kept + filters.apply(
+            rest,
             {k: v for k, v in config.filters.items() if k != "max_sharing_with"},
         )
         # not a bound default (`= fetch_rates_usd`): resolving the bare
