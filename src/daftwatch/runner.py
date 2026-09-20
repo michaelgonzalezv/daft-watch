@@ -20,6 +20,7 @@ from daftwatch.export import _date_desc_key
 from daftwatch.fx import fetch_rates_usd
 from daftwatch.kijiji_adapter import parse_detail as parse_kijiji_detail
 from daftwatch.notify import EmailNotifier
+from daftwatch.outliers import flag_outliers
 from daftwatch.regression import compute_comparison
 from daftwatch.store import Store
 from daftwatch.watchlist import fetch_watchlist
@@ -80,6 +81,13 @@ def export_and_publish(
             rest,
             {k: v for k, v in config.filters.items() if k != "max_sharing_with"},
         )
+        # Flag (never drop) listings priced far above their city's median —
+        # they stay in listings.json for the dashboard to grey out, but the
+        # regression, city ranges and price history all skip them.
+        export_listings = flag_outliers(
+            export_listings, config.outlier_multiplier, config.outlier_min_sample
+        )
+        outlier_ids = frozenset(l.id for l in export_listings if l.outlier_x is not None)
         # not a bound default (`= fetch_rates_usd`): resolving the bare
         # name here, at call time, off this module's globals lets tests
         # monkeypatch daftwatch.runner.fetch_rates_usd once instead of
@@ -102,7 +110,7 @@ def export_and_publish(
             rels.append(config.publish.events_rel)
 
         if config.publish.history_path and config.publish.history_rel:
-            store.snapshot_prices(now.date().isoformat(), fx_usd)
+            store.snapshot_prices(now.date().isoformat(), fx_usd, exclude_ids=outlier_ids)
             rows = store.price_history_rows(config.price_history_days)
             if export.write_history_json(
                 config.publish.history_path, rows, now.isoformat()
@@ -111,7 +119,9 @@ def export_and_publish(
             rels.append(config.publish.history_rel)
 
         if config.publish.compare_path and config.publish.compare_rel:
-            comparison = compute_comparison(export_listings, fx_usd)
+            comparison = compute_comparison(
+                export_listings, fx_usd, outlier_multiplier=config.outlier_multiplier
+            )
             if export.write_compare_json(config.publish.compare_path, comparison):
                 wrote = True
             rels.append(config.publish.compare_rel)

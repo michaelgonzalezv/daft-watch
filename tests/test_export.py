@@ -21,7 +21,7 @@ RECORD_KEYS = [
     "property_type", "agent_phone", "agent_name", "city", "area", "lat", "lng",
     "distance_centre_km",
     "first_published", "first_seen", "last_seen", "last_updated", "status",
-    "off_market_since", "days_on_market", "description",
+    "off_market_since", "days_on_market", "description", "outlier_x",
 ]
 
 
@@ -42,7 +42,8 @@ def mk(id="1", price_eur=700, first_published="2026-09-01", **kw):
 def test_to_record_exact_keys():
     rec = to_record(mk(distances_km={"centre": 1.5}))
     assert list(rec.keys()) == RECORD_KEYS
-    assert len(rec) == 34
+    assert len(rec) == 35
+    assert rec["outlier_x"] is None  # not flagged unless flag_outliers says so
     assert rec["country"] == "Ireland"
     assert rec["previous_price"] is None
     assert rec["status"] == "available"

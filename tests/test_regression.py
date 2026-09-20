@@ -193,3 +193,26 @@ def test_property_type_by_country_omits_a_too_thin_country():
     res = compute_comparison(rows, FX)
     assert "Ireland" in res["property_type_by_country"]
     assert "Canada" not in res["property_type_by_country"]
+
+
+def test_flagged_outliers_are_excluded_from_the_fit_and_reported():
+    from dataclasses import replace
+    rows = [mk(f"ie{i}", "Ireland", "dublin", 1000, "EUR") for i in range(40)]
+    rows += [mk(f"ca{i}", "Canada", "toronto", 700, "CAD") for i in range(40)]
+    bad = replace(mk("weekly", "Ireland", "dublin", 9100, "EUR"), outlier_x=10.1)
+    res = compute_comparison(rows + [bad], FX, outlier_multiplier=3.0)
+    assert res["n"] == 80  # the outlier is not in the sample
+    assert res["outlier_multiplier"] == 3.0
+    assert [e["id"] for e in res["excluded_outliers"]] == ["weekly"]
+    assert res["excluded_outliers"][0]["outlier_x"] == 10.1
+    # and it never reached the city stats either
+    assert res["median_price_usd_by_city"]["dublin"]["max_usd"] == round(1000 * 1.1)
+
+
+def test_excluded_outliers_worst_first():
+    from dataclasses import replace
+    rows = [mk(f"ie{i}", "Ireland", "dublin", 1000, "EUR") for i in range(40)]
+    a = replace(mk("a", "Ireland", "dublin", 4000, "EUR"), outlier_x=4.0)
+    b = replace(mk("b", "Ireland", "dublin", 9000, "EUR"), outlier_x=9.0)
+    res = compute_comparison(rows + [a, b], FX)
+    assert [e["id"] for e in res["excluded_outliers"]] == ["b", "a"]

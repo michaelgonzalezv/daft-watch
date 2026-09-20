@@ -418,6 +418,16 @@ def test_snapshot_prices_converts_through_fx_usd(store):
     assert r["median"] == 550  # 500 * 1.1
 
 
+def test_snapshot_prices_skips_excluded_ids(store):
+    store.begin_cycle()
+    store.sync("s", [mk_share("a", 500), mk_share("b", 700), mk_share("weird", 9100)])
+    for i in ("a", "b", "weird"):
+        store.set_city(i, "cork")
+    store.snapshot_prices("2026-09-10", {"EUR": 1.0}, exclude_ids=frozenset({"weird"}))
+    r = store.price_history_rows(days=400)[0]
+    assert r["count"] == 2 and r["p75"] == 700  # 9100 never entered the percentiles
+
+
 def test_snapshot_prices_skips_a_currency_missing_from_fx_usd(store):
     store.begin_cycle()
     store.sync("s", [mk_share("a", 500)])

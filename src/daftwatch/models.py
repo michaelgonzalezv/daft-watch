@@ -48,6 +48,10 @@ class Listing:
     off_market_since: str | None = None      # GONE timestamp, when off_market
     distances_km: dict[str, float] = field(default_factory=dict)
     detail_fetched: bool = False
+    # Set at export time (never stored): the listing's price as a multiple of
+    # its city's median, when it is high enough to be treated as an outlier.
+    # See daftwatch.outliers.
+    outlier_x: float | None = None
 
 
 def parse_price(text: str) -> int:

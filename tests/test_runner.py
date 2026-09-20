@@ -776,6 +776,35 @@ def test_export_and_publish_writes_compare_json_too(tmp_path):
     store.close()
 
 
+def test_an_outlier_is_flagged_in_the_export_and_kept_out_of_the_statistics(tmp_path):
+    # a €9,100 "room" (2,100/week) among ~€800 ones: it must still be in
+    # listings.json (visible, greyed out on the dashboard) but flagged, and
+    # excluded from compare.json's numbers while being listed there.
+    store = Store(str(tmp_path / "t.db"))
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    pub = PublishConfig(
+        json_path=str(repo / "listings.json"), repo_dir=str(repo),
+        file_rel="listings.json", git_push=False,
+        compare_path=str(repo / "compare.json"), compare_rel="compare.json",
+    )
+    s = Search(name="Dublin sharing", category="sharing", params={})
+    rooms = [replace(mkshare(f"d{i}", 800, lat=_DUBLIN[0], lng=_DUBLIN[1]), price_native=800)
+             for i in range(20)]
+    rooms.append(replace(mkshare("weekly", 9100, lat=_DUBLIN[0], lng=_DUBLIN[1]), price_native=9100))
+    run_cycle(cfg([s], publish=pub), store, FakeAdapter({"Dublin sharing": rooms}),
+              RecordingNotifier(), logging.getLogger("t"))
+
+    listings = {r["id"]: r for r in
+                json.loads((repo / "listings.json").read_text(encoding="utf-8"))["listings"]}
+    assert listings["weekly"]["outlier_x"] == round(9100 / 800, 1)  # kept, but flagged
+    assert listings["d0"]["outlier_x"] is None
+    compare = json.loads((repo / "compare.json").read_text(encoding="utf-8"))
+    assert [e["id"] for e in compare["excluded_outliers"]] == ["weekly"]
+    assert compare["outlier_multiplier"] == 3.0
+    store.close()
+
+
 def test_export_and_publish_writes_history_json_in_usd(tmp_path):
     # history.json's price_history snapshot must go through the same
     # fx_usd export_and_publish already computes for listings.json/

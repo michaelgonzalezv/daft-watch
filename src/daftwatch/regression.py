@@ -104,7 +104,11 @@ def _fit_property_type_only(rows: list[tuple[Listing, float, float]]) -> dict | 
     return {"n": len(rows), "reference": ptype_ref, "coefficients": coefficients}
 
 
-def compute_comparison(listings: list[Listing], fx_usd: dict[str, float]) -> dict:
+def compute_comparison(
+    listings: list[Listing],
+    fx_usd: dict[str, float],
+    outlier_multiplier: float | None = None,
+) -> dict:
     """log(price_usd) ~ country + property_type + distance_centre_km, fit by
     plain OLS (numpy.linalg.lstsq — no external stats dependency). Returns a
     dashboard-ready dict: coefficients (with an approximate %-vs-reference
@@ -112,8 +116,19 @@ def compute_comparison(listings: list[Listing], fx_usd: dict[str, float]) -> dic
     sample sizes, plain descriptive city medians, and the caveats above.
     """
     rows: list[tuple[Listing, float, float]] = []
+    excluded: list[dict] = []
     for l in listings:
         if l.status != "available":
+            continue
+        if l.outlier_x is not None:
+            # flagged upstream (daftwatch.outliers): left out of every
+            # statistic below, but reported so the exclusion is auditable
+            # instead of a listing quietly vanishing from the numbers.
+            excluded.append({
+                "id": l.id, "title": l.title, "url": l.url, "city": l.city,
+                "currency": l.currency, "price_native": l.price_native,
+                "price_weekly": l.price_weekly, "outlier_x": l.outlier_x,
+            })
             continue
         if not l.price_native or not l.currency or l.currency not in fx_usd:
             continue
@@ -130,6 +145,9 @@ def compute_comparison(listings: list[Listing], fx_usd: dict[str, float]) -> dic
     result: dict = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "n": len(rows),
+        # what "outlier" meant this run, so the dashboard can say it
+        "outlier_multiplier": outlier_multiplier,
+        "excluded_outliers": sorted(excluded, key=lambda e: -e["outlier_x"]),
         "caveats": _CAVEATS,
     }
     if len(rows) < 30:

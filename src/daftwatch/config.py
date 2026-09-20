@@ -63,6 +63,10 @@ class Config:
     export_gone_within_days: int = 30   # keep off-market listings this long
     events_history_days: int = 90       # events.json window
     price_history_days: int = 400       # history.json window
+    # listings priced above this multiple of their city's median are flagged
+    # (outlier_x) and left out of the statistics — see daftwatch.outliers
+    outlier_multiplier: float = 3.0
+    outlier_min_sample: int = 15        # cities with fewer priced listings are never flagged
     watchlist_api: str | None = None    # dashboard /api/favs URL (from env FAVS_API)
     watchlist_key: str | None = None    # its x-fav-key (from env FAVS_KEY)
     backup: "BackupConfig | None" = None
@@ -175,5 +179,7 @@ def load_config(path: str | os.PathLike) -> Config:
         export_gone_within_days=data.get("export_gone_within_days", 30),
         events_history_days=data.get("events_history_days", 90),
         price_history_days=data.get("price_history_days", 400),
+        outlier_multiplier=data.get("outlier_multiplier", 3.0),
+        outlier_min_sample=data.get("outlier_min_sample", 15),
         backup=backup,
     )
