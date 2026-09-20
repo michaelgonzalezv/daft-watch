@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS listings (
     agent_phone TEXT,
     agent_name TEXT,
     country TEXT DEFAULT 'Ireland',
-    archived_at TEXT
+    archived_at TEXT,
+    coords_tried INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,10 +73,10 @@ CREATE TABLE IF NOT EXISTS price_history (
     p75 INTEGER,
     PRIMARY KEY (date, city, category)
 );
-PRAGMA user_version = 7;
+PRAGMA user_version = 8;
 """
 
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 
 # Columns added to an existing older DB by ``_migrate``. Keep in sync with the
 # ``CREATE TABLE listings`` block above. Any column missing from an existing
@@ -105,6 +106,7 @@ _ADDED_COLUMNS = [
     ("agent_name", "TEXT"),
     ("country", "TEXT DEFAULT 'Ireland'"),
     ("archived_at", "TEXT"),
+    ("coords_tried", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -288,7 +290,11 @@ class Store:
             # back to whatever's already stored when this cycle has nothing.
             self._db.execute(
                 "UPDATE listings SET title=?, url=?, price_eur=?, beds=?, baths=?, "
-                "property_type=?, area=?, county=?, lat=?, lng=?, raw_json=?, "
+                "property_type=?, area=?, county=?, "
+                # COALESCE: a later search result without `point` (daft omits
+                # it for a big share of listings) must not overwrite the
+                # coordinates an earlier one — or the detail page — gave us.
+                "lat=COALESCE(?, lat), lng=COALESCE(?, lng), raw_json=?, "
                 "last_seen=?, active=1, missing_cycles=0, "
                 "source=?, currency=?, price_native=?, price_weekly=?, "
                 "first_published=?, room_type=?, previous_price=?, country=?, "
@@ -468,6 +474,31 @@ class Store:
             sql += " LIMIT ?"
             params.append(limit)
         return [r[0] for r in self._db.execute(sql, params).fetchall()]
+
+    def needs_coords(self, limit: int) -> list[str]:
+        """Active daft listings with no coordinates that we haven't already
+        tried to recover from their detail page (``coords_tried``) — so a
+        detail page that also lacks them is asked once, not every cycle."""
+        return [
+            r[0] for r in self._db.execute(
+                "SELECT id FROM listings WHERE active = 1 AND source = 'daft' "
+                "AND (lat IS NULL OR lng IS NULL) AND coords_tried = 0 "
+                "ORDER BY first_seen ASC, id ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        ]
+
+    def apply_coords(
+        self, listing_id: str, lat: float | None, lng: float | None
+    ) -> None:
+        """Record coordinates recovered from a detail page (never overwriting
+        ones already there) and mark the attempt, found or not."""
+        self._db.execute(
+            "UPDATE listings SET lat = COALESCE(lat, ?), lng = COALESCE(lng, ?), "
+            "coords_tried = 1 WHERE id = ?",
+            (lat, lng, listing_id),
+        )
+        self._db.commit()
 
     def apply_detail(self, listing_id: str, fields: dict) -> None:
         self._db.execute(

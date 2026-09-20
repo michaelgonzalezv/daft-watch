@@ -63,6 +63,7 @@ class Config:
     notify: NotifyConfig = field(default_factory=NotifyConfig)
     detail_price_cap: int = 800
     detail_max_per_cycle: int = 60
+    coords_max_per_cycle: int = 20      # coordinate-less daft listings re-fetched per cycle
     publish: PublishConfig | None = None
     email_distance_km: dict[str, float] = field(default_factory=dict)
     email_max_price: int | None = None
@@ -188,6 +189,7 @@ def load_config(path: str | os.PathLike) -> Config:
         notify=notify,
         detail_price_cap=data.get("detail_price_cap", 800),
         detail_max_per_cycle=data.get("detail_max_per_cycle", 60),
+        coords_max_per_cycle=data.get("coords_max_per_cycle", 20),
         publish=publish,
         email_distance_km=email_distance_km,
         email_max_price=email_max_price,

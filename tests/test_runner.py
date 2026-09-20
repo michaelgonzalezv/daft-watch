@@ -865,3 +865,57 @@ def test_archive_failure_never_fails_the_cycle(tmp_path, monkeypatch):
                   RecordingNotifier(), logging.getLogger("t"))
     assert r.searches_failed == []                 # cycle completed normally
     store.close()
+
+
+def _no_coords(id, price, city_coords=None):
+    return mkshare(id, price, lat=None, lng=None)
+
+
+def test_a_listing_without_coordinates_gets_them_and_a_distance_from_its_detail_page(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Cork sharing", category="sharing", params={})
+    lst = _no_coords("d1", 700)
+    detail_listing = {"_overview": {}, "point": {"type": "Point", "coordinates": [_CORK[1], _CORK[0]]}}
+    adapter = FakeAdapter({"Cork sharing": [lst]}, details={"/share/d1": detail_listing})
+    run_cycle(cfg([s]), store, adapter, RecordingNotifier(), logging.getLogger("t"))
+
+    got = store.get_listing("d1")
+    assert (got.lat, got.lng) == (_CORK[0], _CORK[1])
+    assert got.distances_km["centre"] < 0.1          # sitting on the centre
+    store.close()
+
+
+def test_already_enriched_listings_missing_coords_are_recovered_without_touching_their_detail(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Cork sharing", category="sharing", params={})
+    lst = _no_coords("d1", 700)
+    # cycle 1: detail page has NO point -> enriched, tried once, still no coords
+    a1 = FakeAdapter({"Cork sharing": [lst]}, details={"/share/d1": {"_overview": {"sharing with": "3"}}})
+    run_cycle(cfg([s]), store, a1, RecordingNotifier(), logging.getLogger("t"))
+    assert store.get_listing("d1").sharing_with == 3 and store.get_listing("d1").lat is None
+    assert store.needs_coords(10) == []              # asked once, not again
+
+    # the DB row is reset as if it had never been tried (e.g. daft starts serving `point` again)
+    store._db.execute("UPDATE listings SET coords_tried = 0")
+    store._db.commit()
+    detail = {"_overview": {"sharing with": "9"},     # a DIFFERENT value: must not be applied
+              "point": {"type": "Point", "coordinates": [_CORK[1], _CORK[0]]}}
+    a2 = FakeAdapter({"Cork sharing": [lst]}, details={"/share/d1": detail})
+    run_cycle(cfg([s]), store, a2, RecordingNotifier(), logging.getLogger("t"))
+
+    got = store.get_listing("d1")
+    assert (got.lat, got.lng) == (_CORK[0], _CORK[1])
+    assert got.sharing_with == 3                      # untouched: coords_only re-fetch
+    assert a2.detail_calls == ["/share/d1"]
+    store.close()
+
+
+def test_coordinate_recovery_respects_its_per_cycle_budget(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Cork sharing", category="sharing", params={})
+    lsts = [_no_coords(f"d{i}", 700) for i in range(5)]
+    config = replace(cfg([s]), coords_max_per_cycle=2, detail_price_cap=0)  # no normal detail candidates
+    adapter = FakeAdapter({"Cork sharing": lsts})
+    run_cycle(config, store, adapter, RecordingNotifier(), logging.getLogger("t"))
+    assert len(adapter.detail_calls) == 2
+    store.close()

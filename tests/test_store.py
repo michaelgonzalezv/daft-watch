@@ -37,7 +37,7 @@ NEW_COLS = {
     "last_updated", "sharing_with", "rooms_available", "preferences",
     "owner_occupied", "available_from", "bathroom_type", "description",
     "room_type", "city", "detail_json", "detail_fetched", "previous_price",
-    "country", "archived_at",
+    "country", "archived_at", "coords_tried",
 }
 
 V1_SCHEMA = """
@@ -69,11 +69,11 @@ def store(tmp_path):
 
 
 def test_schema_stamps_user_version(store):
-    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 8
 
 
 def test_fresh_db_is_v2_with_new_columns(store):
-    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 8
     assert NEW_COLS <= _cols(store)
 
 
@@ -91,7 +91,7 @@ def test_v1_db_migrates_preserving_rows(tmp_path):
 
     s = Store(p)
     try:
-        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 8
         assert NEW_COLS <= _cols(s)
         row = s._db.execute("SELECT * FROM listings WHERE id='old1'").fetchone()
         assert row["price_eur"] == 950
@@ -112,7 +112,7 @@ def test_migration_idempotent_on_reopen(tmp_path):
     Store(p).close()
     s = Store(p)
     try:
-        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 8
         assert NEW_COLS <= _cols(s)
     finally:
         s.close()
@@ -679,3 +679,59 @@ def test_a_listing_that_comes_back_can_be_archived_again_when_it_closes_again(st
     assert store._db.execute("SELECT archived_at FROM listings WHERE id='a'").fetchone()[0] is None
     _close(store, ["a"], days_ago=45)
     assert [d["id"] for d in store.archive_candidates(older_than_days=30)] == ["a"]
+
+
+
+# -- coordinates: never wiped by a re-sync, recoverable from the detail page ---
+
+def _located(id, price, lat=53.3, lng=-6.2):
+    return replace(mk_share(id, price), lat=lat, lng=lng)
+
+
+def test_resync_without_coordinates_does_not_wipe_the_ones_we_have(store):
+    # daft's search results often omit `point`; that must not overwrite the
+    # coordinates an earlier result (or the detail page) already gave us.
+    store.begin_cycle()
+    store.sync("s", [_located("a", 700)])
+    store.begin_cycle()
+    store.sync("s", [_located("a", 700, lat=None, lng=None)])
+    got = store.get_listing("a")
+    assert (got.lat, got.lng) == (53.3, -6.2)
+
+
+def test_resync_with_new_coordinates_still_updates_them(store):
+    store.begin_cycle()
+    store.sync("s", [_located("a", 700)])
+    store.begin_cycle()
+    store.sync("s", [_located("a", 700, lat=53.4, lng=-6.3)])
+    assert (store.get_listing("a").lat, store.get_listing("a").lng) == (53.4, -6.3)
+
+
+def test_needs_coords_lists_only_active_daft_listings_without_them(store):
+    kj = replace(mk_share("kj", 700), lat=None, lng=None, source="kijiji")
+    store.begin_cycle()
+    store.sync("s", [_located("has", 700), _located("no", 700, None, None), kj])
+    assert store.needs_coords(limit=10) == ["no"]   # not the located one, not kijiji
+
+
+def test_apply_coords_sets_them_marks_the_attempt_and_is_not_asked_again(store):
+    store.begin_cycle()
+    store.sync("s", [_located("no", 700, None, None)])
+    store.apply_coords("no", 51.9, -8.47)
+    assert (store.get_listing("no").lat, store.get_listing("no").lng) == (51.9, -8.47)
+    assert store.needs_coords(limit=10) == []
+
+
+def test_a_detail_page_without_coordinates_is_asked_once_not_every_cycle(store):
+    store.begin_cycle()
+    store.sync("s", [_located("no", 700, None, None)])
+    assert store.needs_coords(limit=10) == ["no"]
+    store.apply_coords("no", None, None)             # asked, page had none either
+    assert store.needs_coords(limit=10) == []
+
+
+def test_apply_coords_never_overwrites_existing_ones(store):
+    store.begin_cycle()
+    store.sync("s", [_located("a", 700)])
+    store.apply_coords("a", 1.0, 2.0)
+    assert (store.get_listing("a").lat, store.get_listing("a").lng) == (53.3, -6.2)

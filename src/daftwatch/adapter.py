@@ -183,6 +183,11 @@ def parse_detail(listing_dict: dict) -> dict:
         "last_updated": last_updated,
         "agent_phone": _norm_phone(seller.get("phone")),
         "agent_name": name or None,
+        # The search results stopped carrying `point` for a lot of listings
+        # (~45% of active daft ones today), but the detail page's listing dict
+        # has it — so a listing with no coordinates can get them from here.
+        "lat": _coord(listing_dict, 1),
+        "lng": _coord(listing_dict, 0),
     }
 
 

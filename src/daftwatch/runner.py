@@ -201,7 +201,20 @@ def run_cycle(
     # 2. detail-fetch cheap, not-yet-enriched candidates (enriches the DB
     #    regardless of whether publishing is configured)
     consecutive_failures = 0
-    for lid in store.needs_detail(config.detail_price_cap, config.detail_max_per_cycle):
+    todo: list[tuple[str, bool]] = [
+        (lid, False)
+        for lid in store.needs_detail(config.detail_price_cap, config.detail_max_per_cycle)
+    ]
+    # Plus daft listings that lost / never had coordinates (the search results
+    # often omit `point`; the detail page has it). "coords_only": they are
+    # already enriched, so only the coordinates are taken from the page — the
+    # rest of their detail is left exactly as it is.
+    queued = {lid for lid, _ in todo}
+    todo += [
+        (lid, True) for lid in store.needs_coords(config.coords_max_per_cycle)
+        if lid not in queued
+    ]
+    for lid, coords_only in todo:
         listing = store.get_listing(lid)
         url = (listing.url if listing else "") or ""
         src = listing.source if listing else "daft"
@@ -235,10 +248,22 @@ def run_cycle(
             # active/gone sweep drops it from listings.json within
             # gone_after_cycles.
             logger.info("listing %s has no detail page (delisted); skipping", lid)
-            store.apply_detail(lid, {})
+            if coords_only:
+                store.apply_coords(lid, None, None)   # don't wipe what it already has
+            else:
+                store.apply_detail(lid, {})
             continue
         parse_fn = parse_detail if src == "daft" else parse_kijiji_detail
-        store.apply_detail(lid, parse_fn(detail))
+        fields = parse_fn(detail)
+        if not coords_only:
+            store.apply_detail(lid, fields)
+        if src == "daft":
+            lat, lng = fields.get("lat"), fields.get("lng")
+            store.apply_coords(lid, lat, lng)
+            if lat is not None and listing is not None and listing.city:
+                dist = geo.distance_to_centre(lat, lng, listing.city)
+                if dist is not None:
+                    store.set_cities_and_distances({lid: (listing.city, dist)})
 
     # 3. export listings.json (+ events.json) and commit them (publish only)
     result.publish_ok = export_and_publish(config, store, logger, fx_fetcher)

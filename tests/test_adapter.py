@@ -115,7 +115,7 @@ def test_parse_detail_from_fixture():
     assert set(fields) == {
         "sharing_with", "rooms_available", "preferences", "owner_occupied",
         "available_from", "bathroom_type", "description", "last_updated",
-        "agent_phone", "agent_name",
+        "agent_phone", "agent_name", "lat", "lng",
     }
     assert fields["sharing_with"] == 4
     assert fields["rooms_available"] == 1
@@ -125,6 +125,8 @@ def test_parse_detail_from_fixture():
     assert fields["bathroom_type"] == "Shared Bathroom"
     assert fields["description"] and len(fields["description"]) <= 1000
     assert isinstance(fields["last_updated"], str) and len(fields["last_updated"]) == 10
+    # the detail page carries `point` even when the search result doesn't
+    assert (fields["lat"], fields["lng"]) == (51.897272, -8.458535)
 
 
 def test_parse_detail_empty_overview_all_none():
@@ -132,7 +134,7 @@ def test_parse_detail_empty_overview_all_none():
     assert set(fields) == {
         "sharing_with", "rooms_available", "preferences", "owner_occupied",
         "available_from", "bathroom_type", "description", "last_updated",
-        "agent_phone", "agent_name",
+        "agent_phone", "agent_name", "lat", "lng",
     }
     assert all(v is None for v in fields.values())
 
