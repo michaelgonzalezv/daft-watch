@@ -1,31 +1,87 @@
 name: spike-us-rooms-http
 
 # THROWAWAY. Exists only on the spike/us-rooms-http branch, never on main.
-# One question: does a GitHub Actions runner get 200s from Zumper and Craigslist,
-# or is it blocked? No secrets, read-only, polite (2 s between requests), and it
-# stops a source on the first 403/429/captcha instead of working around it.
+#
+# Repeated small probe of Zumper and Craigslist: 6 snapshots, one every 8 hours
+# (slot k runs at t0 + 8h*k), to see whether a GitHub runner keeps getting 200s
+# and how the inventory moves. It only OBSERVES — an ad missing from a snapshot
+# is recorded as absent, never as GONE.
+#
+# `schedule:` only fires from the default branch, so instead each run waits for
+# its slot, captures, commits its snapshot to this branch, and dispatches the
+# next slot itself (a job is capped at 6 h, so a distant slot is reached by
+# relaying). Bounded: slot 5 is the last, and the chain also ends if both sources
+# get blocked. Uses only the automatic GITHUB_TOKEN; no repository secrets.
 on:
-  push:
-    branches: [spike/us-rooms-http]
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "snapshot number, 0..5"
+        default: "0"
+      t0:
+        description: "ISO time of slot 0 (UTC)"
+        required: true
 
 permissions:
-  contents: read
+  contents: write   # commit the snapshot to THIS branch only
+  actions: write    # dispatch the next slot of THIS workflow
+
+concurrency:
+  group: spike-us-rooms
+  cancel-in-progress: false
 
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 350
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: spike/us-rooms-http
+      SLOT: ${{ inputs.slot }}
+      T0: ${{ inputs.t0 }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: spike/us-rooms-http
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: probe
-        run: python spike/gha_probe.py
-      - name: keep the results
-        if: always()
+
+      - name: wait for this slot
+        id: wait
+        run: python spike/wait_for_slot.py "$SLOT" "$T0" | tee /tmp/wait.log && echo "$(grep wait_result= /tmp/wait.log)" >> "$GITHUB_OUTPUT"
+
+      - name: relay (slot still too far away for one job)
+        if: steps.wait.outputs.wait_result == 'relay'
+        run: gh workflow run spike-us-rooms.yml --ref "$BRANCH" -f slot="$SLOT" -f t0="$T0"
+
+      - name: capture
+        id: capture
+        if: steps.wait.outputs.wait_result == 'capture'
+        run: |
+          set +e
+          python spike/gha_probe2.py "$SLOT"
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: commit the snapshot to the spike branch
+        if: steps.wait.outputs.wait_result == 'capture'
+        run: |
+          git config user.name  "spike bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add spike/data
+          git commit -m "spike data: snapshot slot $SLOT" || echo "nothing to commit"
+          git pull --rebase origin "$BRANCH"
+          git push origin "HEAD:$BRANCH"
+
+      - name: keep the snapshot as an artifact
+        if: steps.wait.outputs.wait_result == 'capture'
         uses: actions/upload-artifact@v4
         with:
-          name: gha-probe-results
-          path: spike/gha_probe_results.json
+          name: snapshot-slot-${{ inputs.slot }}
+          path: spike/data/
           if-no-files-found: warn
+
+      - name: dispatch the next slot
+        if: steps.wait.outputs.wait_result == 'capture' && steps.capture.outputs.rc == '0' && inputs.slot != '5'
+        run: gh workflow run spike-us-rooms.yml --ref "$BRANCH" -f slot="$(( SLOT + 1 ))" -f t0="$T0"
