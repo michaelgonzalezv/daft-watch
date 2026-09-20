@@ -121,7 +121,11 @@ email:
 notify:
   min_event_types: [NEW, PRICE_DROP]
 
-export_gone_within_days: 30
+# 0: off-market listings are no longer exported at all — the dashboard's table
+# hides every one of them, and the Archive tab only needs the ones you starred,
+# which store.export_listings keeps forever via keep_ids regardless of this.
+# (30 shipped ~5,500 hidden rows: listings.json 12 MB instead of ~3.5 MB.)
+export_gone_within_days: 0
 events_history_days: 90
 price_history_days: 400
 # closed listings (off the market > after_days) are appended once to a quarterly
