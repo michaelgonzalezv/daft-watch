@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from daftwatch import export, filters, geo
+from daftwatch.archive import archive_closed
 from daftwatch.adapter import (
     _DAFT_BASE,
     AdapterError,
@@ -353,6 +354,17 @@ def run_cycle(
                 )
         except Exception:
             logger.exception("db backup failed (non-fatal)")
+
+    # 6. archive listings that have been closed a while (an append-only
+    #    quarterly .jsonl.gz next to the DB) and blank their raw payload.
+    #    Never fails the cycle.
+    if config.archive is not None:
+        try:
+            n = archive_closed(store, config.archive.dir, config.archive.after_days)
+            if n:
+                logger.info("archived %d closed listing(s) to %s", n, config.archive.dir)
+        except Exception:
+            logger.exception("archive failed (non-fatal)")
 
     return result
 

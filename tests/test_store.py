@@ -37,7 +37,7 @@ NEW_COLS = {
     "last_updated", "sharing_with", "rooms_available", "preferences",
     "owner_occupied", "available_from", "bathroom_type", "description",
     "room_type", "city", "detail_json", "detail_fetched", "previous_price",
-    "country",
+    "country", "archived_at",
 }
 
 V1_SCHEMA = """
@@ -69,11 +69,11 @@ def store(tmp_path):
 
 
 def test_schema_stamps_user_version(store):
-    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 7
 
 
 def test_fresh_db_is_v2_with_new_columns(store):
-    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert store._db.execute("PRAGMA user_version").fetchone()[0] == 7
     assert NEW_COLS <= _cols(store)
 
 
@@ -91,7 +91,7 @@ def test_v1_db_migrates_preserving_rows(tmp_path):
 
     s = Store(p)
     try:
-        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 7
         assert NEW_COLS <= _cols(s)
         row = s._db.execute("SELECT * FROM listings WHERE id='old1'").fetchone()
         assert row["price_eur"] == 950
@@ -112,7 +112,7 @@ def test_migration_idempotent_on_reopen(tmp_path):
     Store(p).close()
     s = Store(p)
     try:
-        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert s._db.execute("PRAGMA user_version").fetchone()[0] == 7
         assert NEW_COLS <= _cols(s)
     finally:
         s.close()
@@ -613,3 +613,69 @@ def test_seen_this_cycle_across_multiple_searches(store):
     store.sync("s2", [])              # s2 empty this cycle
     gone = store.finish_cycle(1)
     assert {e.listing_id for e in gone} == {"2"}   # only "2" fully absent
+
+
+
+# -- archive: candidates, marking, raw_json pruning ---------------------------
+
+def _close(store, ids, days_ago):
+    """Mark listings off-market and back-date last_seen by *days_ago*."""
+    from datetime import datetime, timedelta, timezone
+    when = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+    before = (datetime.now(timezone.utc) - timedelta(days=days_ago + 1)).isoformat()
+    for i in ids:
+        store._db.execute("UPDATE listings SET active=0, last_seen=? WHERE id=?", (when, i))
+        store._record_event(i, "GONE", 700, None)
+        store._db.execute("UPDATE events SET detected_at=? WHERE listing_id=? AND type='GONE'", (when, i))
+        # everything that happened BEFORE it closed has to sort before it
+        store._db.execute("UPDATE events SET detected_at=? WHERE listing_id=? AND type!='GONE'", (before, i))
+    store._db.commit()
+
+
+def test_archive_candidates_only_old_closed_unarchived(store):
+    store.begin_cycle()
+    store.sync("s", [mk_share("old", 700), mk_share("recent", 700), mk_share("live", 700)])
+    _close(store, ["old"], days_ago=45)
+    _close(store, ["recent"], days_ago=3)
+    got = {d["id"] for d in store.archive_candidates(older_than_days=30)}
+    assert got == {"old"}                       # live and recently-closed stay out
+
+    store.mark_archived(["old"])
+    assert store.archive_candidates(older_than_days=30) == []   # not offered twice
+
+
+def test_archive_candidates_carry_the_price_path_and_skip_the_payload(store):
+    store.begin_cycle()
+    store.sync("s", [mk_share("a", 700)])
+    store.begin_cycle()
+    store.sync("s", [mk_share("a", 650)])       # PRICE_DROP
+    _close(store, ["a"], days_ago=45)
+    (d,) = store.archive_candidates(older_than_days=30)
+    assert [e["type"] for e in d["events"]] == ["NEW", "PRICE_DROP", "GONE"]
+    assert (d["events"][1]["old"], d["events"][1]["new"]) == (700, 650)
+    assert "raw_json" not in d and "detail_json" not in d
+
+
+def test_prune_raw_json_only_touches_archived_rows(store):
+    store.begin_cycle()
+    store.sync("s", [mk_share("arch", 700), mk_share("live", 700)])
+    store._db.execute("UPDATE listings SET raw_json='{\"big\": 1}'")
+    _close(store, ["arch"], days_ago=45)
+    store.mark_archived(["arch"])
+    assert store.prune_raw_json() == 1
+    raw = {r["id"]: r["raw_json"] for r in store._db.execute("SELECT id, raw_json FROM listings")}
+    assert raw["arch"] == "{}"
+    assert raw["live"] == '{"big": 1}'          # a live listing keeps its payload
+    assert store.prune_raw_json() == 0          # idempotent
+
+
+def test_a_listing_that_comes_back_can_be_archived_again_when_it_closes_again(store):
+    store.begin_cycle()
+    store.sync("s", [mk_share("a", 700)])
+    _close(store, ["a"], days_ago=45)
+    store.mark_archived(["a"])
+    store.begin_cycle()
+    store.sync("s", [mk_share("a", 700)])       # BACK on the market
+    assert store._db.execute("SELECT archived_at FROM listings WHERE id='a'").fetchone()[0] is None
+    _close(store, ["a"], days_ago=45)
+    assert [d["id"] for d in store.archive_candidates(older_than_days=30)] == ["a"]

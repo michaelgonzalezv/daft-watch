@@ -6,7 +6,7 @@ from dataclasses import replace
 import pytest
 
 from daftwatch.adapter import AdapterError, SearchAdapter
-from daftwatch.config import Config, NotifyConfig, PublishConfig, Search
+from daftwatch.config import ArchiveConfig, Config, NotifyConfig, PublishConfig, Search
 from daftwatch.models import Listing
 from daftwatch.store import Store
 from daftwatch.runner import export_and_publish, run_cycle
@@ -830,4 +830,38 @@ def test_export_and_publish_writes_history_json_in_usd(tmp_path):
     data = json.loads((repo / "history.json").read_text(encoding="utf-8"))
     assert len(data["history"]) == 1
     assert data["history"][0]["median"] == 500  # fixture fx_usd is 1.0 for every currency
+    store.close()
+
+
+def test_a_closed_listing_is_archived_and_its_payload_blanked_by_run_cycle(tmp_path):
+    import gzip
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Cork sharing", category="sharing", params={})
+    arch = tmp_path / "arch"
+    config = replace(cfg([s]), archive=ArchiveConfig(dir=str(arch), after_days=0))
+    log = logging.getLogger("t")
+
+    run_cycle(config, store, FakeAdapter({"Cork sharing": [mkshare("a", 700)]}),
+              RecordingNotifier(), log)
+    assert not arch.exists()                       # still live: nothing to archive
+
+    # next cycle it's gone (gone_after_cycles=1) -> closed -> archived right away
+    run_cycle(config, store, FakeAdapter({"Cork sharing": []}), RecordingNotifier(), log)
+    (f,) = list(arch.iterdir())
+    lines = gzip.open(f, "rt", encoding="utf-8").read().splitlines()
+    assert json.loads(lines[0])["id"] == "a"
+    assert store._db.execute("SELECT raw_json FROM listings WHERE id='a'").fetchone()[0] == "{}"
+    store.close()
+
+
+def test_archive_failure_never_fails_the_cycle(tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(runner_mod, "archive_closed", boom)
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Cork sharing", category="sharing", params={})
+    config = replace(cfg([s]), archive=ArchiveConfig(dir=str(tmp_path / "arch"), after_days=0))
+    r = run_cycle(config, store, FakeAdapter({"Cork sharing": [mkshare("a", 700)]}),
+                  RecordingNotifier(), logging.getLogger("t"))
+    assert r.searches_failed == []                 # cycle completed normally
     store.close()

@@ -124,4 +124,11 @@ notify:
 export_gone_within_days: 30
 events_history_days: 90
 price_history_days: 400
+# closed listings (off the market > after_days) are appended once to a quarterly
+# .jsonl.gz here and their raw payload is blanked; scrape.yml carries data/archive
+# in the db-state branch next to daft.db. Off for a run with no `archive:` block.
+archive:
+  dir: "data/archive"
+  after_days: 30
+
 # no `backup:` block here — on CI the DB is persisted via the db-state branch

@@ -48,6 +48,12 @@ class BackupConfig:
 
 
 @dataclass
+class ArchiveConfig:
+    dir: str                            # where the quarterly .jsonl.gz files go
+    after_days: int = 30                # archive a listing once closed this long
+
+
+@dataclass
 class Config:
     interval_minutes: int = 30
     gone_after_cycles: int = 2
@@ -70,6 +76,7 @@ class Config:
     watchlist_api: str | None = None    # dashboard /api/favs URL (from env FAVS_API)
     watchlist_key: str | None = None    # its x-fav-key (from env FAVS_KEY)
     backup: "BackupConfig | None" = None
+    archive: "ArchiveConfig | None" = None
 
 
 @dataclass
@@ -154,6 +161,14 @@ def load_config(path: str | os.PathLike) -> Config:
             every_hours=int(backup_raw.get("every_hours", 24)),
         )
 
+    archive = None
+    archive_raw = data.get("archive")
+    if archive_raw is not None:
+        archive = ArchiveConfig(
+            dir=archive_raw["dir"],
+            after_days=int(archive_raw.get("after_days", 30)),
+        )
+
     # Parse email.distance_km / email.max_price (both optional)
     email_distance_km: dict[str, float] = {}
     email_raw = data.get("email") or {}
@@ -182,4 +197,5 @@ def load_config(path: str | os.PathLike) -> Config:
         outlier_multiplier=data.get("outlier_multiplier", 3.0),
         outlier_min_sample=data.get("outlier_min_sample", 15),
         backup=backup,
+        archive=archive,
     )

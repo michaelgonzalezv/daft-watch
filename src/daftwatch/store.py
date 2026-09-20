@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS listings (
     previous_price INTEGER,
     agent_phone TEXT,
     agent_name TEXT,
-    country TEXT DEFAULT 'Ireland'
+    country TEXT DEFAULT 'Ireland',
+    archived_at TEXT
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,10 +72,10 @@ CREATE TABLE IF NOT EXISTS price_history (
     p75 INTEGER,
     PRIMARY KEY (date, city, category)
 );
-PRAGMA user_version = 6;
+PRAGMA user_version = 7;
 """
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 # Columns added to an existing older DB by ``_migrate``. Keep in sync with the
 # ``CREATE TABLE listings`` block above. Any column missing from an existing
@@ -103,6 +104,7 @@ _ADDED_COLUMNS = [
     ("agent_phone", "TEXT"),
     ("agent_name", "TEXT"),
     ("country", "TEXT DEFAULT 'Ireland'"),
+    ("archived_at", "TEXT"),
 ]
 
 
@@ -290,7 +292,7 @@ class Store:
                 "last_seen=?, active=1, missing_cycles=0, "
                 "source=?, currency=?, price_native=?, price_weekly=?, "
                 "first_published=?, room_type=?, previous_price=?, country=?, "
-                "preferences=COALESCE(?, preferences) WHERE id=?",
+                "preferences=COALESCE(?, preferences), archived_at=NULL WHERE id=?",
                 (l.title, l.url, l.price_eur, l.beds, l.baths, l.property_type,
                  l.area, l.county, l.lat, l.lng, json.dumps(l.raw, default=str),
                  now, l.source, l.currency, l.price_native, l.price_weekly,
@@ -361,6 +363,78 @@ class Store:
                 )
             out.append(listing)
         return out
+
+    def archive_candidates(self, older_than_days: int) -> list[dict]:
+        """Closed (off-market) listings last seen more than *older_than_days*
+        ago that haven't been archived yet, each as a plain dict of its
+        columns plus an ``events`` list (oldest first) — everything
+        ``archive.build_record`` needs. ``raw_json``/``detail_json`` are left
+        out on purpose: raw_json is never read back anywhere, and the one
+        thing worth keeping from detail_json (distances) is passed as
+        ``distances_km``.
+        """
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=older_than_days)
+        ).isoformat()
+        rows = self._db.execute(
+            "SELECT * FROM listings WHERE active = 0 AND archived_at IS NULL "
+            "AND last_seen < ? ORDER BY last_seen, id",
+            (cutoff,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = {k: r[k] for k in r.keys() if k not in ("raw_json", "detail_json")}
+            distances: dict = {}
+            if r["detail_json"]:
+                try:
+                    parsed = json.loads(r["detail_json"])
+                    if isinstance(parsed, dict) and isinstance(parsed.get("distances_km"), dict):
+                        distances = parsed["distances_km"]
+                except (ValueError, TypeError):
+                    pass
+            d["distances_km"] = distances
+            d["events"] = []
+            out.append(d)
+        by_id = {d["id"]: d for d in out}
+        ids = list(by_id)
+        for i in range(0, len(ids), 500):  # stay under SQLite's bound-variable cap
+            chunk = ids[i:i + 500]
+            q = ",".join("?" * len(chunk))
+            for e in self._db.execute(
+                "SELECT listing_id, type, old_price, new_price, detected_at FROM events "
+                f"WHERE listing_id IN ({q}) ORDER BY detected_at, id",
+                chunk,
+            ):
+                by_id[e["listing_id"]]["events"].append({
+                    "at": e["detected_at"], "type": e["type"],
+                    "old": e["old_price"], "new": e["new_price"],
+                })
+        return out
+
+    def mark_archived(self, listing_ids: list[str]) -> None:
+        when = _now()
+        for i in range(0, len(listing_ids), 500):
+            chunk = listing_ids[i:i + 500]
+            q = ",".join("?" * len(chunk))
+            self._db.execute(
+                f"UPDATE listings SET archived_at = ? WHERE id IN ({q})", [when, *chunk]
+            )
+        self._db.commit()
+
+    def prune_raw_json(self) -> int:
+        """Blank the stored raw adapter payload of every already-archived
+        listing (the features, description and price path live in the
+        archive and in their own columns). Returns how many rows changed.
+        Pages freed here are reused by future inserts, so the file simply
+        stops growing for a while — no VACUUM, which would rewrite the whole
+        file and blow up the per-commit git delta on the db-state branch.
+        """
+        cur = self._db.execute(
+            "UPDATE listings SET raw_json = '{}' "
+            "WHERE archived_at IS NOT NULL AND raw_json IS NOT NULL AND raw_json != '{}'"
+        )
+        self._db.commit()
+        return cur.rowcount
 
     def events_history(self, days: int) -> dict[str, list[dict]]:
         """All events from the last *days*, grouped by listing id and ordered

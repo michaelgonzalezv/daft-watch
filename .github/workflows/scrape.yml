@@ -30,10 +30,16 @@ jobs:
 
       - name: restore DB from db-state branch
         run: |
-          mkdir -p data
+          mkdir -p data data/archive
           if git fetch --no-tags origin db-state 2>/dev/null && git cat-file -e FETCH_HEAD:daft.db 2>/dev/null; then
             git show FETCH_HEAD:daft.db > data/daft.db
             echo "DB restored ($(du -h data/daft.db | cut -f1))"
+            # the append-only quarterly archive (archive/*.jsonl.gz) rides in
+            # the same branch next to the DB
+            for f in $(git ls-tree --name-only FETCH_HEAD archive/ 2>/dev/null); do
+              git show "FETCH_HEAD:$f" > "data/$f"
+            done
+            echo "archive files restored: $(ls data/archive 2>/dev/null | wc -l)"
           else
             echo "no db-state yet — starting from an empty DB"
           fi
@@ -79,7 +85,14 @@ jobs:
         run: |
           test -f data/daft.db || exit 0
           blob=$(git hash-object -w data/daft.db)
-          tree=$(printf '100644 blob %s\tdaft.db\n' "$blob" | git mktree)
+          # daft.db plus, when there are any, the archive/ subtree of quarterly files
+          atree=""
+          if ls data/archive/*.jsonl.gz >/dev/null 2>&1; then
+            atree=$(for f in data/archive/*.jsonl.gz; do
+              printf '100644 blob %s\t%s\n' "$(git hash-object -w "$f")" "$(basename "$f")"
+            done | git mktree)
+          fi
+          tree=$( { printf '100644 blob %s\tdaft.db\n' "$blob"; if [ -n "$atree" ]; then printf '040000 tree %s\tarchive\n' "$atree"; fi; } | git mktree )
           parent=$(git rev-parse -q --verify FETCH_HEAD || true)
           msg="db state $(date -u +%FT%TZ)"
           if [ -n "$parent" ]; then
