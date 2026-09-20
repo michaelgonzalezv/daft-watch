@@ -1,0 +1,31 @@
+name: spike-us-rooms-http
+
+# THROWAWAY. Exists only on the spike/us-rooms-http branch, never on main.
+# One question: does a GitHub Actions runner get 200s from Zumper and Craigslist,
+# or is it blocked? No secrets, read-only, polite (2 s between requests), and it
+# stops a source on the first 403/429/captcha instead of working around it.
+on:
+  push:
+    branches: [spike/us-rooms-http]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: probe
+        run: python spike/gha_probe.py
+      - name: keep the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gha-probe-results
+          path: spike/gha_probe_results.json
+          if-no-files-found: warn
