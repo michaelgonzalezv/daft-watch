@@ -159,3 +159,70 @@ def test_send_alert_prefixes_subject():
     msg = FakeSMTP.instances[0].sent[0]
     assert msg["Subject"] == "[daft-watch] scraper broken"
     assert "traceback here" in msg.get_content()
+
+
+def _row_for(html, needle):
+    """The <tr>...</tr> that contains *needle* (a listing url)."""
+    return next(r for r in html.split("<tr")[1:] if needle in r)
+
+
+def _digest_html(items):
+    EmailNotifier(smtp_cfg(), smtplib_module=FakeSmtplib).send_digest(items)
+    return _html_part(FakeSMTP.instances[-1].sent[0]).get_content()  # the email just sent
+
+
+def test_every_row_says_what_happened_to_it():
+    # the report: subject says "1 price drop(s)" but no row could be told apart
+    items = [
+        (Event(1, "1", "NEW", None, 725), mk_share("1", 725)),
+        (Event(2, "2", "PRICE_DROP", 780, 750), mk_share("2", 750)),
+        (Event(3, "3", "PRICE_UP", 700, 730), mk_share("3", 730)),
+        (Event(4, "4", "GONE", 700, None), mk_share("4", 700)),
+        (Event(5, "5", "BACK", None, 690), mk_share("5", 690)),
+    ]
+    html = _digest_html(items)
+    assert "<th" in html and ">Update</th>" in html
+    assert "NEW" in _row_for(html, "daft.ie/1")
+    assert "PRICE &#9660;" in _row_for(html, "daft.ie/2")
+    assert "PRICE &#9650;" in _row_for(html, "daft.ie/3")
+    assert "GONE" in _row_for(html, "daft.ie/4")
+    assert "RELISTED" in _row_for(html, "daft.ie/5")
+    # and they don't leak into each other's rows
+    assert "PRICE" not in _row_for(html, "daft.ie/1")
+    assert "NEW" not in _row_for(html, "daft.ie/2")
+
+
+def test_a_price_change_shows_the_old_price_and_direction():
+    html = _digest_html([
+        (Event(1, "1", "PRICE_DROP", 780, 750), mk_share("1", 750)),
+        (Event(2, "2", "PRICE_UP", 700, 730), mk_share("2", 730)),
+    ])
+    drop, up = _row_for(html, "daft.ie/1"), _row_for(html, "daft.ie/2")
+    assert "EUR 750/mo" in drop and "was EUR 780" in drop and "&#9660;" in drop
+    assert "EUR 730/mo" in up and "was EUR 700" in up and "&#9650;" in up
+    # a plain NEW has no 'was' line
+    assert "was" not in _digest_html([(Event(3, "3", "NEW", None, 700), mk_share("3", 700))])
+
+
+def test_a_gone_listing_is_greyed_out():
+    html = _digest_html([
+        (Event(1, "1", "GONE", 700, None), mk_share("1", 700)),
+        (Event(2, "2", "NEW", None, 700), mk_share("2", 700)),
+    ])
+    assert 'color:#888' in _row_for(html, "daft.ie/1")
+    assert 'color:#888' not in _row_for(html, "daft.ie/2")
+
+
+def test_an_unknown_event_type_still_gets_a_badge():
+    html = _digest_html([(Event(1, "1", "WEIRD", None, 700), mk_share("1", 700))])
+    assert "WEIRD" in html
+
+
+def test_watchlist_rows_are_labelled_too():
+    n = EmailNotifier(smtp_cfg(), smtplib_module=FakeSmtplib)
+    n.send_digest(
+        [(Event(1, "1", "NEW", None, 700), mk_share("1", 700))],
+        watchlist_items=[(Event(2, "2", "GONE", 737, None), mk_share("2", 737))],
+    )
+    html = _html_part(FakeSMTP.instances[0].sent[0]).get_content()
+    assert "GONE" in _row_for(html, "daft.ie/2") and "NEW" in _row_for(html, "daft.ie/1")

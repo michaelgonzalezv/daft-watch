@@ -23,10 +23,33 @@ _TH = "padding:6px 10px;border:1px solid #ddd;background:#f3f3f3;color:#333"
 _TD = "padding:6px 10px;border:1px solid #ddd"
 _TD_NUM = _TD + ";text-align:right"
 _COLUMNS = (
-    ("Price", True), ("Rooms", True), ("Sharing", False), ("Prefs", False),
+    ("Update", False), ("Price", True), ("Rooms", True), ("Sharing", False), ("Prefs", False),
     ("Type", False), ("Area", False), ("km", True), ("Published", False),
     ("Link", False),
 )
+
+
+# What each row IS, in the HTML digest. The subject line counts them
+# ("5 new, 1 price drop(s), 1 gone") and the plain-text part tags every entry,
+# but the table used to drop the event entirely — so a row that dropped in
+# price looked identical to a new one and couldn't be picked out of the list.
+_BADGE = {
+    "NEW": ("NEW", "#1a7f37"),
+    "PRICE_DROP": ("PRICE &#9660;", "#1a7f37"),
+    "PRICE_UP": ("PRICE &#9650;", "#c0392b"),
+    "GONE": ("GONE", "#b3261e"),
+    "BACK": ("RELISTED", "#1f6feb"),
+}
+_GREY = "#888"
+
+
+def _badge(event_type: str) -> str:
+    label, colour = _BADGE.get(event_type, (_html.escape(event_type), _GREY))
+    return (
+        f'<span style="display:inline-block;padding:2px 6px;border-radius:3px;'
+        f'font-size:11px;font-weight:bold;color:#fff;background:{colour};'
+        f'white-space:nowrap">{label}</span>'
+    )
 
 
 def _esc(value) -> str:
@@ -58,8 +81,15 @@ def _digest_table(items: list[tuple[Event, Listing]]) -> str:
         + "</tr>"
     )
     rows = []
-    for _event, listing in items:
+    for event, listing in items:
         price = f"{_esc(listing.currency)} {_esc(listing.price_native)}/mo"
+        if event.type in ("PRICE_DROP", "PRICE_UP") and event.old_price is not None:
+            down = event.type == "PRICE_DROP"
+            price += (
+                f'<br><small style="color:{"#1a7f37" if down else "#c0392b"};'
+                f'font-weight:bold">{"&#9660;" if down else "&#9650;"} was '
+                f"{_esc(listing.currency)} {_esc(event.old_price)}</small>"
+            )
         if listing.price_weekly is not None:
             price += (
                 f"<br><small>{_esc(listing.currency)} "
@@ -83,12 +113,14 @@ def _digest_table(items: list[tuple[Event, Listing]]) -> str:
             f'<a href="{_esc(listing.url)}" title="{_esc(listing.title)}">view</a>'
         )
         cells = [
-            (price, True), (rooms, True), (sharing, False), (prefs, False),
+            (_badge(event.type), False), (price, True), (rooms, True), (sharing, False), (prefs, False),
             (ptype, False), (area, False), (km, True), (published, False),
             (link, False),
         ]
+        # a listing that just left the market is greyed out, not hidden
+        row_style = f' style="color:{_GREY}"' if event.type == "GONE" else ""
         rows.append(
-            "<tr>"
+            f"<tr{row_style}>"
             + "".join(
                 f'<td style="{_TD_NUM if num else _TD}">{value}</td>'
                 for value, num in cells
