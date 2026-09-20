@@ -64,24 +64,25 @@ jobs:
           echo "rc=$?" >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: commit the snapshot to the spike branch
-        if: steps.wait.outputs.wait_result == 'capture'
-        run: |
-          git config user.name  "spike bot"
-          git config user.email "actions@users.noreply.github.com"
-          git add spike/data
-          git commit -m "spike data: snapshot slot $SLOT" || echo "nothing to commit"
-          git pull --rebase origin "$BRANCH"
-          git push origin "HEAD:$BRANCH"
-
       - name: keep the snapshot as an artifact
-        if: steps.wait.outputs.wait_result == 'capture'
+        if: always() && steps.wait.outputs.wait_result == 'capture'
         uses: actions/upload-artifact@v4
         with:
           name: snapshot-slot-${{ inputs.slot }}
           path: spike/data/
           if-no-files-found: warn
 
+      - name: commit the snapshot to the spike branch
+        if: always() && steps.wait.outputs.wait_result == 'capture'
+        continue-on-error: true      # the artifact above is the safety net; don't let this cut the chain
+        run: |
+          git config user.name  "spike bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -f spike/data      # spike/data is in a .gitignore
+          git commit -m "spike data: snapshot slot $SLOT" || echo "nothing to commit"
+          git pull --rebase origin "$BRANCH"
+          git push origin "HEAD:$BRANCH"
+
       - name: dispatch the next slot
-        if: steps.wait.outputs.wait_result == 'capture' && steps.capture.outputs.rc == '0' && inputs.slot != '5'
+        if: always() && steps.wait.outputs.wait_result == 'capture' && steps.capture.outputs.rc == '0' && inputs.slot != '5'
         run: gh workflow run spike-us-rooms.yml --ref "$BRANCH" -f slot="$(( SLOT + 1 ))" -f t0="$T0"
