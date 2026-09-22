@@ -154,13 +154,30 @@ def run_cycle(
 
     fetched: list = []
     city_by_id: dict[str, str | None] = {}
+    # A Kijiji search-level AdapterError already means its own backoff ladder
+    # is exhausted (up to ~12.5 min, see kijiji_adapter._BACKOFF) — that's a
+    # systemic block on kijiji.ca, not a one-off on that one region. Without
+    # this breaker, a blocked run with 20 Kijiji regions could burn the whole
+    # 25-min job timeout on backoff alone (2 regions ~= the entire budget)
+    # and starve export/publish/email for every source, not just Kijiji's.
+    # Same reasoning as the 3-strike breaker on the detail loop below, just
+    # applied per source instead of per listing — but daft is deliberately
+    # exempt: its searches are independent per-city HTTP calls with no such
+    # backoff cost, and one city 404ing must not skip the rest (see
+    # test_adapter_error_is_isolated).
+    blocked_sources: set[str] = set()
     for search in config.searches:
+        if search.source in blocked_sources:
+            result.searches_failed.append(search.name)
+            continue
         try:
             listings = adapter.fetch(search)
         except AdapterError as exc:
             logger.exception("search %r failed: %r", search.name, exc)
             result.searches_failed.append(search.name)
             result.adapter_broken = True
+            if search.source != "daft":
+                blocked_sources.add(search.source)
             continue
         city = geo.city_of(search.name)
         for l in listings:

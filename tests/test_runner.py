@@ -138,6 +138,68 @@ def test_adapter_error_is_isolated(tmp_path):
     store.close()
 
 
+class CountingAdapter(SearchAdapter):
+    """Like FakeAdapter, but records which searches fetch() was actually
+    called for — used to prove a skipped search was never attempted."""
+    def __init__(self, by_search):
+        self.by_search = by_search
+        self.calls = []
+
+    def fetch(self, search):
+        self.calls.append(search.name)
+        v = self.by_search[search.name]
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+    def detail(self, path):
+        return {}
+
+
+def test_blocked_kijiji_source_skips_rest_of_its_searches_same_cycle(tmp_path):
+    # Regression: Kijiji rate-limiting the first of 20 regions burned the
+    # whole 25-min job timeout on backoff (each region's ladder tops out at
+    # ~12.5 min) before the cycle ever reached export/publish/email — no
+    # email at all that cycle, for daft either. One AdapterError from Kijiji
+    # must short-circuit its remaining searches this cycle.
+    store = Store(str(tmp_path / "t.db"))
+    toronto = Search(name="Toronto sharing", category="sharing", params={}, source="kijiji")
+    montreal = Search(name="Montreal sharing", category="sharing", params={}, source="kijiji")
+    dublin = Search(name="Dublin sharing", category="sharing", params={})
+    adapter = CountingAdapter({
+        "Toronto sharing": AdapterError("rate-limited by kijiji.ca; backoff exhausted"),
+        "Montreal sharing": [mkcad("m1", 500)],
+        "Dublin sharing": [mkshare("d1", 700, lat=_DUBLIN[0], lng=_DUBLIN[1])],
+    })
+    notifier = RecordingNotifier()
+    r = run_cycle(cfg([toronto, montreal, dublin], email_distance_km={"dublin": 6}),
+                  store, adapter, notifier, logging.getLogger("t"))
+
+    assert adapter.calls == ["Toronto sharing", "Dublin sharing"]  # Montreal never attempted
+    assert set(r.searches_failed) == {"Toronto sharing", "Montreal sharing"}
+    assert r.events_sent == 1  # Dublin still published/emailed this cycle
+    store.close()
+
+
+def test_daft_search_failure_does_not_skip_other_daft_searches(tmp_path):
+    # daft is exempt from the breaker above: unlike Kijiji, its searches
+    # carry no expensive backoff, and one city failing is not evidence the
+    # whole source is blocked (test_adapter_error_is_isolated covers the
+    # 2-search case already; this pins the 3rd search still being attempted).
+    store = Store(str(tmp_path / "t.db"))
+    s1 = Search(name="s1", category="rent", params={})
+    s2 = Search(name="s2", category="rent", params={})
+    s3 = Search(name="s3", category="sharing", params={})
+    adapter = CountingAdapter(
+        {"s1": AdapterError("boom"), "s2": AdapterError("boom"), "s3": [mk("9", 800)]}
+    )
+    r = run_cycle(cfg([s1, s2, s3]), store, adapter, RecordingNotifier(),
+                  logging.getLogger("t"))
+    assert adapter.calls == ["s1", "s2", "s3"]
+    assert r.events_sent == 1
+    store.close()
+
+
 def test_filter_excludes_from_notification(tmp_path):
     store = Store(str(tmp_path / "t.db"))
     s = Search(name="s1", category="rent", params={})
