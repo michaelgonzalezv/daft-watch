@@ -67,6 +67,12 @@ class Config:
     publish: PublishConfig | None = None
     email_distance_km: dict[str, float] = field(default_factory=dict)
     email_max_price: int | None = None
+    # CAD (Kijiji) digest cap: separate from email_max_price (authored in EUR)
+    # so the two currencies are never compared against each other. A city not
+    # in email_cad_cities is dropped from the digest outright — unlike the EUR
+    # path, this is meant to stay a short, deliberately narrow list of cities.
+    email_max_price_cad: int | None = None
+    email_cad_cities: set[str] = field(default_factory=set)
     export_gone_within_days: int = 30   # keep off-market listings this long
     events_history_days: int = 90       # events.json window
     price_history_days: int = 400       # history.json window
@@ -179,6 +185,10 @@ def load_config(path: str | os.PathLike) -> Config:
     email_max_price = email_raw.get("max_price")
     if email_max_price is not None:
         email_max_price = int(email_max_price)
+    email_max_price_cad = email_raw.get("max_price_cad")
+    if email_max_price_cad is not None:
+        email_max_price_cad = int(email_max_price_cad)
+    email_cad_cities = set(email_raw.get("cad_cities") or [])
 
     return Config(
         interval_minutes=data.get("interval_minutes", 30),
@@ -193,6 +203,8 @@ def load_config(path: str | os.PathLike) -> Config:
         publish=publish,
         email_distance_km=email_distance_km,
         email_max_price=email_max_price,
+        email_max_price_cad=email_max_price_cad,
+        email_cad_cities=email_cad_cities,
         export_gone_within_days=data.get("export_gone_within_days", 30),
         events_history_days=data.get("events_history_days", 90),
         price_history_days=data.get("price_history_days", 400),
