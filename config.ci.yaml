@@ -97,6 +97,10 @@ searches:
     category: sharing
     source: kijiji
     params: { location_id: "1700220" }
+  - name: "Surrey sharing"          # Kijiji groups it as Delta/Surrey/Langley
+    category: sharing
+    source: kijiji
+    params: { location_id: "1700285" }
 
 filters:
   max_sharing_with: 4
@@ -116,7 +120,20 @@ publish:
 
 email:
   max_price: 800
-  distance_km: { dublin: 6, cork: 4, limerick: 4 }
+  # CAD (Kijiji) digest: a short, deliberately narrow list of cities, not
+  # every one of the 20 Kijiji searches above — see runner.run_cycle.
+  max_price_cad: 1000
+  cad_cities: [toronto, winnipeg, vancouver, surrey, quebec, montreal]
+  distance_km:
+    dublin: 6
+    cork: 4
+    limerick: 4
+    toronto: 2
+    winnipeg: 2
+    vancouver: 2
+    surrey: 2
+    quebec: 2
+    montreal: 2
 
 notify:
   min_event_types: [NEW, PRICE_DROP]

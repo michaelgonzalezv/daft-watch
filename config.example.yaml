@@ -46,11 +46,17 @@ backup:
   every_hours: 24
 
 email:
-  max_price: 800          # digest only; the dashboard ignores this
+  max_price: 800          # digest only (EUR); the dashboard ignores this
+  # CAD (Kijiji): its own cap and an explicit city allow-list — a Kijiji
+  # city not listed here is dropped from the digest, not merely uncapped.
+  max_price_cad: 1000
+  cad_cities: [toronto, montreal]
   distance_km:
     dublin: 6
     cork: 4
     limerick: 4
+    toronto: 2
+    montreal: 2
 
 filters:
   # max_price here would also cap the dashboard — leave it out and use

@@ -75,14 +75,16 @@ class RecordingNotifier:
 
 def cfg(searches, min_types=("NEW", "PRICE_DROP", "GONE"), filters=None,
         publish=None, email_distance_km=None, detail_price_cap=800,
-        email_max_price=None):
+        email_max_price=None, email_max_price_cad=None, email_cad_cities=None):
     return Config(searches=list(searches), gone_after_cycles=1,
                   filters=filters or {},
                   notify=NotifyConfig(min_event_types=list(min_types)),
                   detail_price_cap=detail_price_cap,
                   publish=publish,
                   email_distance_km=email_distance_km or {},
-                  email_max_price=email_max_price)
+                  email_max_price=email_max_price,
+                  email_max_price_cad=email_max_price_cad,
+                  email_cad_cities=email_cad_cities or set())
 
 
 def _init_repo(path):
@@ -376,6 +378,71 @@ def test_non_eur_listings_excluded_from_digest_entirely(tmp_path):
     data = json.loads((repo / "listings.json").read_text(encoding="utf-8"))
     assert {rec["id"] for rec in data["listings"]} == {"kj1"}  # still exported
     assert r.events_sent == 0                                  # but not emailed
+    store.close()
+
+
+_TORONTO = (43.6532, -79.3832)
+
+
+def mkcad(id, price_native, lat=_TORONTO[0], lng=_TORONTO[1], title="Room"):
+    return Listing(
+        id=id, category="sharing", title=title, url=f"https://kijiji.ca/{id}",
+        price_eur=price_native, beds=None, baths=None, property_type="Room",
+        area=None, county=None, lat=lat, lng=lng, raw={},
+        source="kijiji", currency="CAD", country="Canada",
+        price_native=price_native,
+    )
+
+
+def test_cad_digest_narrow_allowlist(tmp_path):
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Toronto sharing", category="sharing", params={}, source="kijiji")
+    cheap_near = mkcad("t1", 900)                                    # in, cheap, near
+    pricey_near = mkcad("t2", 1500)                                  # price over cap
+    cheap_far = mkcad("t3", 900, lat=_TORONTO[0] + 0.2, lng=_TORONTO[1])  # ~22km out
+    adapter = FakeAdapter({"Toronto sharing": [cheap_near, pricey_near, cheap_far]})
+    notifier = RecordingNotifier()
+    run_cycle(
+        cfg([s], email_max_price_cad=1000, email_cad_cities={"toronto"},
+            email_distance_km={"toronto": 2}),
+        store, adapter, notifier, logging.getLogger("t"),
+    )
+    assert {l.id for _, l in notifier.digests[0]} == {"t1"}
+    store.close()
+
+
+def test_cad_digest_drops_city_outside_allowlist(tmp_path):
+    # Same price/distance as an allowed city, but Ottawa isn't in
+    # email_cad_cities — must still be dropped, not fall through the way an
+    # unconfigured EUR city would.
+    store = Store(str(tmp_path / "t.db"))
+    _OTTAWA = (45.4215, -75.6972)
+    s = Search(name="Ottawa sharing", category="sharing", params={}, source="kijiji")
+    room = mkcad("o1", 900, lat=_OTTAWA[0], lng=_OTTAWA[1])
+    adapter = FakeAdapter({"Ottawa sharing": [room]})
+    notifier = RecordingNotifier()
+    run_cycle(
+        cfg([s], email_max_price_cad=1000, email_cad_cities={"toronto"},
+            email_distance_km={"toronto": 2, "ottawa": 2}),
+        store, adapter, notifier, logging.getLogger("t"),
+    )
+    assert notifier.digests == []
+    store.close()
+
+
+def test_cad_digest_off_by_default(tmp_path):
+    # email_max_price_cad unset (the default in production today) — CAD stays
+    # excluded entirely, same as test_non_eur_listings_excluded_from_digest_entirely.
+    store = Store(str(tmp_path / "t.db"))
+    s = Search(name="Toronto sharing", category="sharing", params={}, source="kijiji")
+    room = mkcad("t1", 500)
+    adapter = FakeAdapter({"Toronto sharing": [room]})
+    notifier = RecordingNotifier()
+    run_cycle(
+        cfg([s], email_cad_cities={"toronto"}, email_distance_km={"toronto": 2}),
+        store, adapter, notifier, logging.getLogger("t"),
+    )
+    assert notifier.digests == []
     store.close()
 
 

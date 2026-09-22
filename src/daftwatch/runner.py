@@ -284,6 +284,31 @@ def run_cycle(
         email_filters["max_price"] = config.email_max_price
     eur_fetched = [l for l in fetched if l.currency == "EUR"]
     allowed_ids = {l.id for l in filters.apply(eur_fetched, email_filters)}
+
+    # CAD (Kijiji): its own cap, both narrower and stricter than the EUR path
+    # above. A city outside config.email_cad_cities is dropped outright (not
+    # kept, as within_distance would for an unconfigured EUR city) — the
+    # point of this list is a short, deliberately narrow digest, not "every
+    # Kijiji city until it earns a limit". Off by default (email_max_price_cad
+    # is None) so this never resurrects the ~700-row flood above.
+    if config.email_max_price_cad is not None and config.email_cad_cities:
+        for l in fetched:
+            if l.currency != "CAD":
+                continue
+            if l.price_native is None or not (0 < l.price_native <= config.email_max_price_cad):
+                continue
+            # l.city / l.distances_km are empty on the raw fetch (Kijiji's
+            # to_listing() leaves city None — step 1 above is what resolves
+            # and persists it); read the enriched copy back from the store.
+            stored = store.get_listing(l.id)
+            city = stored.city if stored else None
+            if city not in config.email_cad_cities:
+                continue
+            dist = stored.distances_km.get("centre") if stored else None
+            limit = config.email_distance_km.get(city)
+            if dist is None or limit is None or dist > limit:
+                continue
+            allowed_ids.add(l.id)
     min_types = set(config.notify.min_event_types)
 
     to_send: list[tuple] = []

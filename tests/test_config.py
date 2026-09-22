@@ -101,6 +101,8 @@ def test_load_config_with_publish_and_email_distance(tmp_path):
     assert cfg.publish.file_rel == "tools/rentals/listings.json"
     assert cfg.publish.git_push is True
     assert cfg.email_distance_km == {"dublin": 6.0, "cork": 4.0}
+    assert cfg.email_max_price_cad is None
+    assert cfg.email_cad_cities == set()
 
 
 def test_load_config_without_publish_email_detail(tmp_path):
@@ -117,6 +119,27 @@ def test_load_config_without_publish_email_detail(tmp_path):
     assert cfg.email_distance_km == {}
     assert cfg.detail_price_cap == 800
     assert cfg.detail_max_per_cycle == 60
+
+
+def test_load_config_email_cad_block(tmp_path):
+    p = tmp_path / "config.yaml"
+    p.write_text(textwrap.dedent("""
+        searches:
+          - name: "Toronto sharing"
+            category: sharing
+            source: kijiji
+            params: { location_id: "1700273" }
+        email:
+          max_price_cad: 1000
+          cad_cities: [toronto, montreal]
+          distance_km:
+            toronto: 2
+            montreal: 2
+    """))
+    cfg = load_config(p)
+    assert cfg.email_max_price_cad == 1000
+    assert cfg.email_cad_cities == {"toronto", "montreal"}
+    assert cfg.email_distance_km == {"toronto": 2.0, "montreal": 2.0}
 
 
 def test_load_config_publish_git_push_false(tmp_path):

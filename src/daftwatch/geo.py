@@ -25,6 +25,7 @@ CENTRES: dict[str, tuple[float, float]] = {
     "kelowna": (49.8880, -119.4960),
     "victoria": (48.4284, -123.3656),
     "windsor": (42.3149, -83.0364),
+    "surrey": (49.1913, -122.8490),  # Kijiji groups it as Delta/Surrey/Langley
 }
 
 
