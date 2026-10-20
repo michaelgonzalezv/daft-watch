@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from daftwatch.adapter import DaftListingsAdapter, MultiSourceAdapter
-from daftwatch.config import SmtpConfig, load_config
+from daftwatch.config import EmailConfig, load_config
 from daftwatch.kijiji_adapter import KijijiListingsAdapter
 from daftwatch.notify import EmailNotifier
 from daftwatch.runner import export_and_publish, loop, run_cycle
@@ -30,7 +30,7 @@ def build(args, env: Mapping[str, str]):
     config = load_config(args.config)
     config.watchlist_api = env.get("FAVS_API")
     config.watchlist_key = env.get("FAVS_KEY")
-    smtp = SmtpConfig.from_env(env)
+    email_cfg = EmailConfig.from_env(env)
     db_path = Path(args.db)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     store = Store(str(db_path))
@@ -38,7 +38,7 @@ def build(args, env: Mapping[str, str]):
         "daft": DaftListingsAdapter(rate_limit_seconds=config.rate_limit_seconds),
         "kijiji": KijijiListingsAdapter(rate_limit_seconds=config.rate_limit_seconds),
     })
-    notifier = EmailNotifier(smtp)
+    notifier = EmailNotifier(email_cfg)
     logger = logging.getLogger("daftwatch")
     return config, store, adapter, notifier, logger
 

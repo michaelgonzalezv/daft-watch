@@ -1,33 +1,30 @@
-from daftwatch.config import SmtpConfig
+from daftwatch.config import EmailConfig
 from daftwatch.models import Listing
 from daftwatch.store import Event
 from daftwatch.notify import EmailNotifier
 
 
-class FakeSMTP:
-    instances = []
+class FakeResponse:
+    def __init__(self, status_code=200):
+        self.status_code = status_code
 
-    def __init__(self, host, port, timeout=None):
-        self.host, self.port, self.timeout = host, port, timeout
-        self.tls = False
-        self.logged_in = None
-        self.sent = []
-        self.quit_called = False
-        FakeSMTP.instances.append(self)
-
-    def starttls(self, context=None): self.tls = True; self.tls_context = context
-    def login(self, u, p): self.logged_in = (u, p)
-    def send_message(self, msg): self.sent.append(msg)
-    def quit(self): self.quit_called = True
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
 
 
-class FakeSmtplib:
-    SMTP = FakeSMTP
+class FakeRequests:
+    """Records every POST made by EmailNotifier, one dict per call."""
+    calls = []
+
+    @classmethod
+    def post(cls, url, headers=None, json=None, timeout=None):
+        cls.calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        return FakeResponse()
 
 
-def smtp_cfg():
-    return SmtpConfig(host="h", port=587, user="u", password="pw",
-                      sender="from@x.com", recipient="to@x.com")
+def email_cfg():
+    return EmailConfig(api_key="re_123", sender="from@x.com", recipient="to@x.com")
 
 
 def mk_listing(id, price):
@@ -50,20 +47,8 @@ def mk_share(id, price_native, **kw):
     return Listing(**fields)
 
 
-def _html_part(msg):
-    return next(
-        p for p in msg.walk() if p.get_content_type() == "text/html"
-    )
-
-
-def _plain_part(msg):
-    return next(
-        p for p in msg.walk() if p.get_content_type() == "text/plain"
-    )
-
-
 def setup_function():
-    FakeSMTP.instances.clear()
+    FakeRequests.calls.clear()
 
 
 def test_send_digest_builds_one_email():
@@ -71,19 +56,20 @@ def test_send_digest_builds_one_email():
         (Event(1, "1", "NEW", None, 2000), mk_listing("1", 2000)),
         (Event(2, "2", "PRICE_DROP", 2200, 2000), mk_listing("2", 2000)),
     ]
-    n = EmailNotifier(smtp_cfg(), smtplib_module=FakeSmtplib)
+    n = EmailNotifier(email_cfg(), requests_module=FakeRequests)
     n.send_digest(items)
-    assert len(FakeSMTP.instances) == 1
-    smtp = FakeSMTP.instances[0]
-    assert smtp.tls and smtp.logged_in == ("u", "pw") and smtp.quit_called
-    assert len(smtp.sent) == 1
-    msg = smtp.sent[0]
-    assert msg["To"] == "to@x.com"
-    assert msg["From"] == "from@x.com"
-    assert "2 update(s)" in msg["Subject"]
-    assert "1 new" in msg["Subject"]
-    assert "1 price drop(s)" in msg["Subject"]
-    body = _plain_part(msg).get_content()
+    assert len(FakeRequests.calls) == 1
+    call = FakeRequests.calls[0]
+    assert call["url"] == "https://api.resend.com/emails"
+    assert call["headers"]["Authorization"] == "Bearer re_123"
+    assert call["timeout"] == 30
+    payload = call["json"]
+    assert payload["to"] == ["to@x.com"]
+    assert payload["from"] == "from@x.com"
+    assert "2 update(s)" in payload["subject"]
+    assert "1 new" in payload["subject"]
+    assert "1 price drop(s)" in payload["subject"]
+    body = payload["text"]
     assert "https://daft.ie/1" in body
     assert "2200" in body and "2000" in body
 
@@ -94,12 +80,9 @@ def test_send_digest_attaches_html_table():
         (Event(2, "2", "PRICE_DROP", 900, 800),
          mk_share("2", 800, price_weekly=185)),
     ]
-    n = EmailNotifier(smtp_cfg(), smtplib_module=FakeSmtplib)
+    n = EmailNotifier(email_cfg(), requests_module=FakeRequests)
     n.send_digest(items)
-    msg = FakeSMTP.instances[0].sent[0]
-    html_part = _html_part(msg)
-    assert html_part.get_content_type() == "text/html"
-    html = html_part.get_content()
+    html = FakeRequests.calls[0]["json"]["html"]
     assert "<table" in html
     # 1 header row + 2 data rows
     assert html.count("<tr") == 3
@@ -107,7 +90,7 @@ def test_send_digest_attaches_html_table():
     assert "https://daft.ie/1" in html and "https://daft.ie/2" in html
     assert "/wk" in html
     # plaintext still present and unchanged in shape
-    plain = _plain_part(msg).get_content()
+    plain = FakeRequests.calls[0]["json"]["text"]
     assert "[NEW] Flat 1" in plain
     assert "  https://daft.ie/2" in plain
 
@@ -115,9 +98,9 @@ def test_send_digest_attaches_html_table():
 def test_digest_html_escapes_listing_text():
     items = [(Event(1, "1", "NEW", None, 700),
               mk_share("1", 700, title="A & B <flat>"))]
-    n = EmailNotifier(smtp_cfg(), smtplib_module=FakeSmtplib)
+    n = EmailNotifier(email_cfg(), requests_module=FakeRequests)
     n.send_digest(items)
-    html = _html_part(FakeSMTP.instances[0].sent[0]).get_content()
+    html = FakeRequests.calls[0]["json"]["html"]
     assert "A &amp; B &lt;flat&gt;" in html
     assert "<flat>" not in html
 
@@ -126,39 +109,42 @@ def test_digest_html_dashes_for_none_values():
     items = [(Event(1, "1", "NEW", None, 700),
               mk_share("1", 700, sharing_with=None, preferences=None,
                        distances_km={}))]
-    n = EmailNotifier(smtp_cfg(), smtplib_module=FakeSmtplib)
+    n = EmailNotifier(email_cfg(), requests_module=FakeRequests)
     n.send_digest(items)
-    html = _html_part(FakeSMTP.instances[0].sent[0]).get_content()
+    html = FakeRequests.calls[0]["json"]["html"]
     assert html.count("—") >= 3
 
 
-def test_send_uses_verified_tls_context_and_timeout():
-    import ssl
-    n = EmailNotifier(smtp_cfg(), smtplib_module=FakeSmtplib)
-    n.send_alert("x", "y")
-    smtp = FakeSMTP.instances[0]
-    assert smtp.timeout == 30
-    assert isinstance(smtp.tls_context, ssl.SSLContext)
-    assert smtp.tls_context.verify_mode == ssl.CERT_REQUIRED
-    assert smtp.tls_context.check_hostname is True
+def test_send_raises_on_http_error():
+    import pytest
+
+    class FailingRequests(FakeRequests):
+        @classmethod
+        def post(cls, url, headers=None, json=None, timeout=None):
+            cls.calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+            return FakeResponse(status_code=401)
+
+    n = EmailNotifier(email_cfg(), requests_module=FailingRequests)
+    with pytest.raises(RuntimeError):
+        n.send_alert("x", "y")
 
 
-def test_smtp_password_not_in_repr():
-    assert "pw" not in repr(smtp_cfg())
+def test_email_api_key_not_in_repr():
+    assert "re_123" not in repr(email_cfg())
 
 
 def test_send_digest_empty_is_noop():
-    n = EmailNotifier(smtp_cfg(), smtplib_module=FakeSmtplib)
+    n = EmailNotifier(email_cfg(), requests_module=FakeRequests)
     n.send_digest([])
-    assert FakeSMTP.instances == []
+    assert FakeRequests.calls == []
 
 
 def test_send_alert_prefixes_subject():
-    n = EmailNotifier(smtp_cfg(), smtplib_module=FakeSmtplib)
+    n = EmailNotifier(email_cfg(), requests_module=FakeRequests)
     n.send_alert("scraper broken", "traceback here")
-    msg = FakeSMTP.instances[0].sent[0]
-    assert msg["Subject"] == "[daft-watch] scraper broken"
-    assert "traceback here" in msg.get_content()
+    payload = FakeRequests.calls[0]["json"]
+    assert payload["subject"] == "[daft-watch] scraper broken"
+    assert "traceback here" in payload["text"]
 
 
 def _row_for(html, needle):
@@ -167,8 +153,8 @@ def _row_for(html, needle):
 
 
 def _digest_html(items):
-    EmailNotifier(smtp_cfg(), smtplib_module=FakeSmtplib).send_digest(items)
-    return _html_part(FakeSMTP.instances[-1].sent[0]).get_content()  # the email just sent
+    EmailNotifier(email_cfg(), requests_module=FakeRequests).send_digest(items)
+    return FakeRequests.calls[-1]["json"]["html"]  # the email just sent
 
 
 def test_every_row_says_what_happened_to_it():
@@ -219,10 +205,10 @@ def test_an_unknown_event_type_still_gets_a_badge():
 
 
 def test_watchlist_rows_are_labelled_too():
-    n = EmailNotifier(smtp_cfg(), smtplib_module=FakeSmtplib)
+    n = EmailNotifier(email_cfg(), requests_module=FakeRequests)
     n.send_digest(
         [(Event(1, "1", "NEW", None, 700), mk_share("1", 700))],
         watchlist_items=[(Event(2, "2", "GONE", 737, None), mk_share("2", 737))],
     )
-    html = _html_part(FakeSMTP.instances[0].sent[0]).get_content()
+    html = FakeRequests.calls[0]["json"]["html"]
     assert "GONE" in _row_for(html, "daft.ie/2") and "NEW" in _row_for(html, "daft.ie/1")

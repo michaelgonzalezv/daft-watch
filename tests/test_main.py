@@ -17,7 +17,7 @@ def write_cfg(tmp_path):
 
 
 ENV = {
-    "SMTP_HOST": "h", "SMTP_PORT": "587", "SMTP_USER": "u", "SMTP_PASS": "p",
+    "RESEND_API_KEY": "re_123",
     "ALERT_FROM": "f@x.com", "ALERT_TO": "t@x.com",
 }
 
@@ -94,10 +94,10 @@ def test_republish_without_a_publish_block_is_an_error_not_a_silent_noop(tmp_pat
     assert rc == 2
 
 
-def test_missing_smtp_env_returns_nonzero(tmp_path):
+def test_missing_email_env_returns_nonzero(tmp_path):
     cfg = write_cfg(tmp_path)
     rc = main(["run", "--config", str(cfg), "--db", str(tmp_path / "d.db")],
-              env={"SMTP_HOST": "h"})
+              env={"RESEND_API_KEY": "k"})
     assert rc != 0
 
 

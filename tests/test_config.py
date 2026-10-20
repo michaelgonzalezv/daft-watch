@@ -1,6 +1,6 @@
 import textwrap
 import pytest
-from daftwatch.config import load_config, SmtpConfig
+from daftwatch.config import load_config, EmailConfig
 
 
 def test_load_config_parses_searches_and_notify(tmp_path):
@@ -56,20 +56,18 @@ def test_load_config_rejects_unknown_category(tmp_path):
         load_config(p)
 
 
-def test_smtp_config_from_env_missing_var():
+def test_email_config_from_env_missing_var():
     with pytest.raises(KeyError):
-        SmtpConfig.from_env({"SMTP_HOST": "h"})
+        EmailConfig.from_env({"RESEND_API_KEY": "k"})
 
 
-def test_smtp_config_from_env_ok():
+def test_email_config_from_env_ok():
     env = {
-        "SMTP_HOST": "smtp.example.com", "SMTP_PORT": "587",
-        "SMTP_USER": "u", "SMTP_PASS": "p",
+        "RESEND_API_KEY": "re_123",
         "ALERT_FROM": "from@example.com", "ALERT_TO": "to@example.com",
     }
-    s = SmtpConfig.from_env(env)
-    assert s.host == "smtp.example.com"
-    assert s.port == 587
+    s = EmailConfig.from_env(env)
+    assert s.api_key == "re_123"
     assert s.recipient == "to@example.com"
 
 

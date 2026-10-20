@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import html as _html
-import smtplib
-import ssl
-from email.message import EmailMessage
 
-from daftwatch.config import SmtpConfig
+import requests
+
+from daftwatch.config import EmailConfig
 from daftwatch.models import Listing
 from daftwatch.store import Event
+
+_RESEND_URL = "https://api.resend.com/emails"
 
 _LABEL = {
     "NEW": "new", "PRICE_DROP": "price drop(s)", "PRICE_UP": "price rise(s)",
@@ -146,25 +147,26 @@ def _digest_html(
 
 
 class EmailNotifier:
-    def __init__(self, smtp: SmtpConfig, smtplib_module=smtplib):
-        self._smtp = smtp
-        self._smtplib = smtplib_module
+    def __init__(self, email: EmailConfig, requests_module=requests):
+        self._email = email
+        self._requests = requests_module
 
     def _send(self, subject: str, body: str, html: str | None = None) -> None:
-        msg = EmailMessage()
-        msg["From"] = self._smtp.sender
-        msg["To"] = self._smtp.recipient
-        msg["Subject"] = subject
-        msg.set_content(body)
+        payload = {
+            "from": self._email.sender,
+            "to": [self._email.recipient],
+            "subject": subject,
+            "text": body,
+        }
         if html is not None:
-            msg.add_alternative(html, subtype="html")
-        server = self._smtplib.SMTP(self._smtp.host, self._smtp.port, timeout=30)
-        try:
-            server.starttls(context=ssl.create_default_context())
-            server.login(self._smtp.user, self._smtp.password)
-            server.send_message(msg)
-        finally:
-            server.quit()
+            payload["html"] = html
+        resp = self._requests.post(
+            _RESEND_URL,
+            headers={"Authorization": f"Bearer {self._email.api_key}"},
+            json=payload,
+            timeout=30,
+        )
+        resp.raise_for_status()
 
     def send_alert(self, subject: str, body: str) -> None:
         self._send(f"[daft-watch] {subject}", body)

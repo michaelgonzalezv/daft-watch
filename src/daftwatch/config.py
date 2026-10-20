@@ -87,21 +87,20 @@ class Config:
 
 
 @dataclass
-class SmtpConfig:
-    host: str
-    port: int
-    user: str
-    password: str = field(repr=False)
+class EmailConfig:
+    """Resend (https://resend.com) HTTP API, not SMTP -- Gmail SMTP from a
+    datacenter IP (GitHub Actions) started getting the connection dropped
+    mid-AUTH by Google, same symptom across two different App Passwords, so
+    it's a provider-side block, not a credential problem. Resend's API is
+    built for exactly this (sending from CI/servers), see daftwatch.notify."""
+    api_key: str = field(repr=False)
     sender: str
     recipient: str
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str]) -> "SmtpConfig":
+    def from_env(cls, env: Mapping[str, str]) -> "EmailConfig":
         return cls(
-            host=env["SMTP_HOST"],
-            port=int(env["SMTP_PORT"]),
-            user=env["SMTP_USER"],
-            password=env["SMTP_PASS"],
+            api_key=env["RESEND_API_KEY"],
             sender=env["ALERT_FROM"],
             recipient=env["ALERT_TO"],
         )
